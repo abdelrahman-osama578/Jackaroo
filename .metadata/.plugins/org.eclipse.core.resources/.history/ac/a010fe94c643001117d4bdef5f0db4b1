@@ -1,0 +1,593 @@
+package view;
+
+import engine.Game;
+import engine.board.Cell;
+import engine.board.CellType;
+import engine.board.SafeZone;
+import exception.GameException;
+import exception.SplitOutOfRangeException;
+import javafx.animation.FadeTransition;
+import javafx.animation.KeyFrame;
+import javafx.animation.ScaleTransition;
+import javafx.animation.Timeline;
+import javafx.application.Application;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.TextArea;
+import javafx.scene.input.KeyCode;
+import javafx.scene.layout.AnchorPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
+import javafx.scene.shape.Rectangle;
+import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
+import javafx.scene.text.TextAlignment;
+import javafx.stage.Stage;
+import javafx.util.Duration;
+import model.Colour;
+import model.card.Card;
+import model.card.standard.Seven;
+import model.card.standard.Standard;
+import model.player.CPU;
+import model.player.Marble;
+import model.player.Player;
+
+import javax.swing.JOptionPane;
+import java.io.IOException;
+import java.util.ArrayList;
+
+public class JackarooGUI extends Application {
+
+    private Stage window;
+    private Scene menuScene, gameScene;
+    
+    private Game game;
+    private AnchorPane boardPane;
+    private HBox handPane;
+    private HBox controlsPane; 
+    private Label turnLabel;
+    private Label nextPlayerLabel;
+    private StackPane firepitPane;
+    private TextArea logArea; // The new action log
+
+    private Timeline cpuTimeline; 
+    private ArrayList<Marble> guiSelectedMarbles = new ArrayList<>();
+    private final int CELL_SIZE = 22;
+
+    @Override
+    public void start(Stage primaryStage) {
+        this.window = primaryStage;
+        
+        // Setup initial menu scene
+        createMainMenu();
+
+        window.setTitle("Jackaroo: A New Game Spin");
+        window.setScene(menuScene);
+        window.setResizable(false);
+        window.show();
+    }
+
+    // ==========================================
+    // MENU & LOADING SCREENS
+    // ==========================================
+
+    private void createMainMenu() {
+        VBox layout = new VBox(40);
+        layout.setAlignment(Pos.CENTER);
+        layout.setStyle("-fx-background-color: #1C2833;");
+
+        Label title = new Label("JACKAROO");
+        title.setFont(Font.font("Arial", FontWeight.EXTRA_BOLD, 80));
+        title.setTextFill(Color.GOLD);
+
+        Button startBtn = createMenuButton("Start Game", "#2ECC71");
+        startBtn.setOnAction(e -> triggerLoadingScreen());
+
+        Button rulesBtn = createMenuButton("View Rules", "#3498DB");
+        rulesBtn.setOnAction(e -> showRulesScreen());
+
+        Button exitBtn = createMenuButton("Exit", "#E74C3C");
+        exitBtn.setOnAction(e -> window.close());
+
+        layout.getChildren().addAll(title, startBtn, rulesBtn, exitBtn);
+        menuScene = new Scene(layout, 1350, 950);
+    }
+
+    private Button createMenuButton(String text, String colorHex) {
+        Button btn = new Button(text);
+        btn.setFont(Font.font("Arial", FontWeight.BOLD, 24));
+        btn.setStyle("-fx-background-color: " + colorHex + "; -fx-text-fill: white; -fx-background-radius: 15;");
+        btn.setPrefSize(250, 60);
+        return btn;
+    }
+
+    private void showRulesScreen() {
+        VBox layout = new VBox(20);
+        layout.setAlignment(Pos.CENTER);
+        layout.setStyle("-fx-background-color: #1C2833;");
+        layout.setPadding(new Insets(50));
+
+        Label title = new Label("Game Rules");
+        title.setFont(Font.font("Arial", FontWeight.BOLD, 40));
+        title.setTextFill(Color.WHITE);
+
+        TextArea rulesText = new TextArea();
+        rulesText.setEditable(false);
+        rulesText.setWrapText(true);
+        rulesText.setFont(Font.font("Arial", 16));
+        rulesText.setStyle("-fx-control-inner-background: #2E4053; -fx-text-fill: white;");
+        rulesText.setText("1. Objective: Move all 4 marbles from Home to Safe Zone.\n\n" +
+                "2. Fielding: You must play an Ace or King to field a marble to your Base Cell. Use the 'F' key as a shortcut.\n\n" +
+                "3. Movement: Marbles move clockwise. A '4' card moves backward. A '5' forces you to move ANY marble.\n\n" +
+                "4. Traps: 8 hidden trap cells will instantly destroy a marble.\n\n" +
+                "5. Standard Turn: Select a card, select the required marbles, and click 'Play Turn'.\n\n" +
+                "If you have no playable cards, click 'Discard / Skip'.");
+
+        Button backBtn = createMenuButton("Back to Menu", "#E74C3C");
+        backBtn.setOnAction(e -> window.setScene(menuScene));
+
+        layout.getChildren().addAll(title, rulesText, backBtn);
+        window.setScene(new Scene(layout, 1350, 950));
+    }
+
+    private void triggerLoadingScreen() {
+        VBox layout = new VBox(30);
+        layout.setAlignment(Pos.CENTER);
+        layout.setStyle("-fx-background-color: #2E4053;");
+
+        Circle loader = new Circle(40, Color.GOLD);
+        
+        // Pulsing Animation
+        ScaleTransition st = new ScaleTransition(Duration.seconds(0.6), loader);
+        st.setByX(0.5f);
+        st.setByY(0.5f);
+        st.setCycleCount(4); // Play for ~2.4 seconds
+        st.setAutoReverse(true);
+
+        Label loadText = new Label("Initializing Board Engine...");
+        loadText.setFont(Font.font("Arial", FontWeight.BOLD, 24));
+        loadText.setTextFill(Color.WHITE);
+
+        layout.getChildren().addAll(loader, loadText);
+        Scene loadScene = new Scene(layout, 1350, 950);
+        window.setScene(loadScene);
+
+        st.setOnFinished(e -> initializeGameEngine());
+        st.play();
+    }
+
+    // ==========================================
+    // GAME INITIALIZATION & UI SETUP
+    // ==========================================
+
+    private void initializeGameEngine() {
+        String input = JOptionPane.showInputDialog(null, "Please enter your name:", "Game Setup", JOptionPane.QUESTION_MESSAGE);
+        String playerName = (input != null && !input.trim().isEmpty()) ? input : "Player 1";
+
+        try {
+            game = new Game(playerName);
+        } catch (IOException e) {
+            showAlert(JOptionPane.ERROR_MESSAGE, "Initialization Error", "Could not load Cards.csv: " + e.getMessage());
+            window.setScene(menuScene);
+            return;
+        }
+
+        boardPane = new AnchorPane();
+        boardPane.setStyle("-fx-background-color: #2E4053;"); 
+
+        setupGameUIComponents();
+        updateUI();
+
+        gameScene = new Scene(boardPane, 1350, 950);
+
+        gameScene.setOnKeyPressed(e -> {
+            if (e.getCode() == KeyCode.F && !controlsPane.isDisabled()) {
+                try {
+                    game.fieldMarble();
+                    updateLog(game.getPlayers().get(0).getName() + " shortcut fielded a marble!");
+                    guiSelectedMarbles.clear();
+                    updateUI();
+                } catch (GameException ex) {
+                    showAlert(JOptionPane.WARNING_MESSAGE, "Cannot Field Marble", ex.getMessage());
+                }
+            }
+        });
+
+        window.setScene(gameScene);
+        updateLog("Game started! Welcome, " + playerName + ".");
+    }
+
+    private void setupGameUIComponents() {
+        Rectangle boardBg = new Rectangle(700, 700, Color.web("#8C9170"));
+        boardBg.setArcWidth(40); boardBg.setArcHeight(40);
+        AnchorPane.setTopAnchor(boardBg, 50.0);
+        AnchorPane.setLeftAnchor(boardBg, 200.0);
+        boardPane.getChildren().add(boardBg);
+
+        firepitPane = new StackPane();
+        Rectangle fpBg = new Rectangle(80, 120, Color.web("#4A2F1D"));
+        firepitPane.getChildren().add(fpBg);
+        AnchorPane.setTopAnchor(firepitPane, 340.0);
+        AnchorPane.setLeftAnchor(firepitPane, 510.0);
+        boardPane.getChildren().add(firepitPane);
+
+        handPane = new HBox(15);
+        handPane.setAlignment(Pos.CENTER);
+        AnchorPane.setBottomAnchor(handPane, 20.0);
+        AnchorPane.setLeftAnchor(handPane, 350.0);
+        boardPane.getChildren().add(handPane);
+
+        // Controls
+        Button playBtn = new Button("Play Turn");
+        playBtn.setStyle("-fx-background-color: #2ECC71; -fx-text-fill: white; -fx-font-weight: bold;");
+        playBtn.setOnAction(e -> handleHumanTurn());
+
+        Button discardBtn = new Button("Discard / Skip");
+        discardBtn.setStyle("-fx-background-color: #F39C12; -fx-text-fill: white; -fx-font-weight: bold;");
+        discardBtn.setOnAction(e -> handleDiscardTurn());
+
+        Button deselectBtn = new Button("Deselect All");
+        deselectBtn.setStyle("-fx-background-color: #E74C3C; -fx-text-fill: white; -fx-font-weight: bold;");
+        deselectBtn.setOnAction(e -> {
+            game.deselectAll();
+            guiSelectedMarbles.clear(); 
+            updateUI();
+        });
+
+        controlsPane = new HBox(10, playBtn, discardBtn, deselectBtn);
+        AnchorPane.setBottomAnchor(controlsPane, 50.0);
+        AnchorPane.setRightAnchor(controlsPane, 360.0); // Shifted to leave room for the log
+        boardPane.getChildren().add(controlsPane);
+
+        // Information Labels
+        turnLabel = new Label();
+        turnLabel.setFont(Font.font("Arial", FontWeight.BOLD, 20));
+        turnLabel.setTextFill(Color.WHITE);
+        AnchorPane.setTopAnchor(turnLabel, 20.0);
+        AnchorPane.setLeftAnchor(turnLabel, 20.0);
+
+        nextPlayerLabel = new Label();
+        nextPlayerLabel.setFont(Font.font("Arial", FontWeight.NORMAL, 16));
+        nextPlayerLabel.setTextFill(Color.LIGHTGRAY);
+        AnchorPane.setTopAnchor(nextPlayerLabel, 50.0);
+        AnchorPane.setLeftAnchor(nextPlayerLabel, 20.0);
+
+        // NEW: Action Log Menu
+        Label logTitle = new Label("ACTION LOG");
+        logTitle.setFont(Font.font("Arial", FontWeight.BOLD, 18));
+        logTitle.setTextFill(Color.GOLD);
+        AnchorPane.setTopAnchor(logTitle, 20.0);
+        AnchorPane.setRightAnchor(logTitle, 210.0);
+
+        logArea = new TextArea();
+        logArea.setEditable(false);
+        logArea.setWrapText(true);
+        logArea.setPrefSize(300, 750);
+        logArea.setStyle("-fx-control-inner-background: #1C2833; -fx-text-fill: #EAECEE; -fx-font-family: monospace; -fx-font-size: 14px;");
+        AnchorPane.setTopAnchor(logArea, 50.0);
+        AnchorPane.setRightAnchor(logArea, 20.0);
+
+        boardPane.getChildren().addAll(turnLabel, nextPlayerLabel, logTitle, logArea);
+    }
+
+    private void updateLog(String message) {
+        logArea.appendText("> " + message + "\n\n");
+    }
+
+    // ==========================================
+    // DRAWING THE BOARD
+    // ==========================================
+
+    private void updateUI() {
+        boardPane.getChildren().removeIf(node -> node instanceof Circle || node.getId() != null);
+        handPane.getChildren().clear();
+
+        drawTrackAndMarbles();
+        drawPlayerInfoAndCPUHands();
+        drawHumanHand();
+        updateFirepit();
+
+        turnLabel.setText("Current Turn: " + game.getActivePlayerColour());
+        nextPlayerLabel.setText("Next Player: " + game.getNextPlayerColour());
+    }
+
+    private void setControlsEnabled(boolean enabled) {
+        handPane.setDisable(!enabled);
+        controlsPane.setDisable(!enabled);
+    }
+
+    private void drawTrackAndMarbles() {
+        ArrayList<Cell> track = game.getBoard().getTrack();
+        for (int i = 0; i < track.size(); i++) {
+            Cell cell = track.get(i);
+            double[] coords = getCrossCoordinates(i);
+            
+            Rectangle rect = new Rectangle(coords[0], coords[1], CELL_SIZE, CELL_SIZE);
+            rect.setStroke(Color.BLACK);
+            rect.setFill(cell.getCellType() == CellType.BASE ? Color.LIGHTBLUE : 
+                         cell.getCellType() == CellType.ENTRY ? Color.LIGHTGREEN : 
+                         cell.isTrap() ? Color.DARKGRAY : Color.WHITE);
+            
+            rect.setId("trackCell");
+            boardPane.getChildren().add(rect);
+
+            if (cell.getMarble() != null) drawMarble(cell.getMarble(), coords[0], coords[1]);
+        }
+
+        for (SafeZone zone : game.getBoard().getSafeZones()) {
+            int idx = 0;
+            for(Cell cell : zone.getCells()) {
+                double[] coords = getSafeZoneCoords(zone.getColour(), idx++);
+                Rectangle sr = new Rectangle(coords[0], coords[1], CELL_SIZE, CELL_SIZE);
+                sr.setFill(getPaint(zone.getColour()).deriveColor(1,1,1,0.4));
+                sr.setId("safeCell");
+                boardPane.getChildren().add(sr);
+                
+                if(cell.getMarble() != null) drawMarble(cell.getMarble(), coords[0], coords[1]);
+            }
+        }
+
+        for (Player p : game.getPlayers()) {
+            double[] homeBase = getHomeZoneCoords(p.getColour());
+            int count = 0;
+            for (Marble m : p.getMarbles()) {
+                drawMarble(m, homeBase[0] + (count % 2) * 25, homeBase[1] + (count / 2) * 25);
+                count++;
+            }
+        }
+    }
+
+    private void drawMarble(Marble marble, double x, double y) {
+        Circle circle = new Circle(x + CELL_SIZE / 2.0, y + CELL_SIZE / 2.0, CELL_SIZE / 2.2);
+        circle.setFill(getPaint(marble.getColour()));
+        circle.setStroke(Color.BLACK);
+
+        circle.setOnMouseClicked(e -> {
+            if(controlsPane.isDisabled()) return; 
+            try {
+                game.selectMarble(marble);
+                guiSelectedMarbles.add(marble); 
+                circle.setStroke(Color.GOLD);
+                circle.setStrokeWidth(3);
+            } catch (GameException ex) {
+                showAlert(JOptionPane.WARNING_MESSAGE, "Invalid Selection", ex.getMessage());
+            }
+        });
+        boardPane.getChildren().add(circle);
+    }
+
+    private void drawPlayerInfoAndCPUHands() {
+        for (Player p : game.getPlayers()) {
+            double[] coords = getHomeZoneCoords(p.getColour());
+            Label nameLabel = new Label(p.getName() + "\nCards: " + p.getHand().size());
+            nameLabel.setFont(Font.font("Arial", FontWeight.BOLD, 14));
+            nameLabel.setTextFill(getPaint(p.getColour()));
+            nameLabel.setId("playerLabel");
+            AnchorPane.setTopAnchor(nameLabel, coords[1] - 40);
+            AnchorPane.setLeftAnchor(nameLabel, coords[0]);
+            boardPane.getChildren().add(nameLabel);
+        }
+    }
+
+    private void drawHumanHand() {
+        Player human = game.getPlayers().get(0);
+        for (Card card : human.getHand()) {
+            Button cardBtn = new Button();
+            if (card instanceof Standard) {
+                Standard std = (Standard) card;
+                cardBtn.setText(std.getName() + "\n" + std.getSuit());
+            } else {
+                cardBtn.setText(card.getName() + "\nWild");
+            }
+            cardBtn.setPrefSize(75, 110);
+            cardBtn.setOnAction(e -> {
+                try {
+                    game.selectCard(card);
+                    handPane.getChildren().forEach(n -> n.setStyle(""));
+                    cardBtn.setStyle("-fx-border-color: gold; -fx-border-width: 3;");
+                } catch (GameException ex) {
+                    showAlert(JOptionPane.WARNING_MESSAGE, "Selection Error", ex.getMessage());
+                }
+            });
+            handPane.getChildren().add(cardBtn);
+        }
+    }
+
+    private void updateFirepit() {
+        if (firepitPane.getChildren().size() > 1) {
+            firepitPane.getChildren().remove(1, firepitPane.getChildren().size());
+        }
+        ArrayList<Card> fp = game.getFirePit();
+        Card topCard = null;
+        for (int i = fp.size() - 1; i >= 0; i--) {
+            if (fp.get(i) != null) {
+                topCard = fp.get(i);
+                break;
+            }
+        }
+        if (topCard != null) {
+            Label cardLabel = new Label(topCard.getName());
+            cardLabel.setStyle("-fx-background-color: white; -fx-padding: 20; -fx-border-color: black;");
+            firepitPane.getChildren().add(cardLabel);
+        }
+    }
+
+    // ==========================================
+    // ENGINE & TURN LOGIC
+    // ==========================================
+
+    private void handleHumanTurn() {
+        Player human = game.getPlayers().get(0);
+        Card selected = human.getSelectedCard();
+
+        if (selected == null) {
+            showAlert(JOptionPane.WARNING_MESSAGE, "No Card Selected", "Please select a card to play.");
+            return;
+        }
+
+        if (selected instanceof Seven && guiSelectedMarbles.size() == 2) {
+            Integer[] options = {1, 2, 3, 4, 5, 6};
+            Integer result = (Integer) JOptionPane.showInputDialog(null, "Split Moves:", "Seven", JOptionPane.QUESTION_MESSAGE, null, options, options[2]);
+            if (result != null) {
+                try { game.editSplitDistance(result); } 
+                catch (SplitOutOfRangeException ex) { showAlert(JOptionPane.ERROR_MESSAGE, "Invalid Split", ex.getMessage()); return; }
+            } else return; 
+        }
+
+        try {
+            int preHomeSize = human.getMarbles().size();
+            String cardName = selected.getName();
+            
+            game.playPlayerTurn();
+            game.endPlayerTurn();
+            
+            updateLog(human.getName() + " played: " + cardName);
+            guiSelectedMarbles.clear();
+            updateUI();
+
+            if (human.getMarbles().size() > preHomeSize && !(selected.getName().contains("Burner"))) {
+                updateLog("TRAP TRIGGERED! " + human.getName() + " lost a marble.");
+                showAlert(JOptionPane.INFORMATION_MESSAGE, "Trap Triggered!", "A marble fell into a trap cell and was returned home!");
+            }
+
+            Colour winner = game.checkWin();
+            if (winner != null) {
+                updateLog("GAME OVER. " + winner + " wins!");
+                showAlert(JOptionPane.INFORMATION_MESSAGE, "Game Over", winner + " has won the game!");
+                return;
+            }
+
+            executeCPUTurns();
+
+        } catch (GameException e) {
+            showAlert(JOptionPane.WARNING_MESSAGE, "Invalid Move", e.getMessage());
+            game.deselectAll();
+            guiSelectedMarbles.clear();
+            updateUI();
+        }
+    }
+    
+    private void handleDiscardTurn() {
+        Player human = game.getPlayers().get(0);
+        if (human.getSelectedCard() == null) {
+            showAlert(JOptionPane.WARNING_MESSAGE, "No Card", "Select a card to discard.");
+            return;
+        }
+        updateLog(human.getName() + " discarded " + human.getSelectedCard().getName() + " and passed.");
+        try { game.endPlayerTurn(); } catch (Exception ignored) {}
+        guiSelectedMarbles.clear();
+        updateUI();
+        executeCPUTurns();
+    }
+
+    private void executeCPUTurns() {
+        if (cpuTimeline != null && cpuTimeline.getStatus() == Timeline.Status.RUNNING) return;
+
+        setControlsEnabled(false); 
+
+        cpuTimeline = new Timeline();
+        KeyFrame kf = new KeyFrame(Duration.seconds(1.2), e -> {
+            Player human = game.getPlayers().get(0);
+
+            if (game.getActivePlayerColour() == human.getColour()) {
+                if (!game.canPlayTurn()) {
+                    updateLog(human.getName() + "'s turn was skipped (No Cards).");
+                    try { game.endPlayerTurn(); } catch (Exception ignored) {}
+                    guiSelectedMarbles.clear();
+                    updateUI();
+                } else {
+                    setControlsEnabled(true);
+                    cpuTimeline.stop();
+                }
+            } else {
+                Player active = null;
+                for (Player p : game.getPlayers()) if (p.getColour() == game.getActivePlayerColour()) active = p;
+                
+                if (active instanceof CPU) {
+                    if (game.canPlayTurn()) {
+                        try { active.play(); } catch (Exception ignored) {}
+                    }
+                    try { game.endPlayerTurn(); } catch (Exception ignored) {}
+                    updateUI();
+
+                    // Read firepit to log CPU's action
+                    ArrayList<Card> fp = game.getFirePit();
+                    String actionCard = "Skipped/Unknown";
+                    for (int i = fp.size() - 1; i >= 0; i--) {
+                        if (fp.get(i) != null) { actionCard = fp.get(i).getName(); break; }
+                    }
+                    updateLog(active.getName() + " finished turn. (Used: " + actionCard + ")");
+
+                    Colour winner = game.checkWin();
+                    if (winner != null) {
+                        updateLog("GAME OVER. " + winner + " wins!");
+                        showAlert(JOptionPane.INFORMATION_MESSAGE, "Game Over", winner + " has won the game!");
+                        cpuTimeline.stop();
+                    }
+                }
+            }
+        });
+        
+        cpuTimeline.getKeyFrames().add(kf);
+        cpuTimeline.setCycleCount(Timeline.INDEFINITE);
+        cpuTimeline.play();
+    }
+
+    // --- Mathematical Layout Helpers ---
+    private double[] getCrossCoordinates(int index) {
+        int side = index / 25;
+        int pos = index % 25;
+        double x = 250, y = 100;
+        if(side == 0) { x += pos * CELL_SIZE; y = 100; }
+        else if(side == 1) { x = 250 + 25 * CELL_SIZE; y = 100 + pos * CELL_SIZE; }
+        else if(side == 2) { x = 250 + (25 - pos) * CELL_SIZE; y = 100 + 25 * CELL_SIZE; }
+        else if(side == 3) { x = 250; y = 100 + (25 - pos) * CELL_SIZE; }
+        return new double[]{x, y};
+    }
+
+    private double[] getSafeZoneCoords(Colour c, int idx) {
+        double[] base = getCrossCoordinates(getEngineBaseOffset(c));
+        return new double[]{base[0] + 30, base[1] + 30 + (idx * CELL_SIZE)}; 
+    }
+
+    private double[] getHomeZoneCoords(Colour c) {
+        switch(c) {
+            case RED: return new double[]{220, 120};
+            case BLUE: return new double[]{780, 120};
+            case GREEN: return new double[]{780, 680};
+            case YELLOW: return new double[]{220, 680};
+            default: return new double[]{0,0};
+        }
+    }
+
+    private int getEngineBaseOffset(Colour c) {
+        for(int i = 0; i < game.getBoard().getSafeZones().size(); i++) {
+            if(game.getBoard().getSafeZones().get(i).getColour() == c) return i * 25;
+        }
+        return 0;
+    }
+
+    private Color getPaint(Colour c) {
+        switch (c) {
+            case RED: return Color.RED;
+            case BLUE: return Color.DODGERBLUE;
+            case GREEN: return Color.FORESTGREEN;
+            case YELLOW: return Color.GOLD;
+            default: return Color.BLACK;
+        }
+    }
+
+    private void showAlert(int messageType, String title, String content) {
+        JOptionPane.showMessageDialog(null, content, title, messageType);
+    }
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+}

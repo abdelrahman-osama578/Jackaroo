@@ -1,0 +1,816 @@
+package view;
+
+import engine.Game;
+import engine.board.Cell;
+import engine.board.CellType;
+import engine.board.SafeZone;
+import exception.GameException;
+import javafx.scene.text.TextAlignment;
+import exception.SplitOutOfRangeException;
+import javafx.animation.Animation;
+import javafx.animation.FadeTransition;
+import javafx.animation.KeyFrame;
+import javafx.animation.ScaleTransition;
+import javafx.animation.Timeline;
+import javafx.animation.TranslateTransition;
+import javafx.application.Application;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.Group;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.effect.DropShadow;
+import javafx.scene.effect.GaussianBlur;
+import javafx.scene.input.KeyCode;
+import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.paint.CycleMethod;
+import javafx.scene.paint.LinearGradient;
+import javafx.scene.paint.RadialGradient;
+import javafx.scene.paint.Stop;
+import javafx.scene.shape.Circle;
+import javafx.scene.shape.Rectangle;
+import javafx.scene.shape.StrokeType;
+import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
+import javafx.stage.Stage;
+import javafx.util.Duration;
+import model.Colour;
+import model.card.Card;
+import model.card.standard.Seven;
+import model.card.standard.Standard;
+import model.player.CPU;
+import model.player.Marble;
+import model.player.Player;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Optional;
+import java.util.Random;
+
+public class JackarooGUI extends Application {
+
+    private Stage window;
+    private Scene menuScene, gameScene;
+    
+    private Game game;
+    private AnchorPane boardPane;
+    private HBox handPane;
+    private HBox controlsPane; 
+    private Label turnLabel;
+    private Label nextPlayerLabel;
+    private StackPane firepitPane;
+    private TextArea logArea; 
+
+    private Timeline cpuTimeline; 
+    private ArrayList<Marble> guiSelectedMarbles = new ArrayList<>();
+    private final int CELL_SIZE = 24;
+
+    // Yōtei Aesthetic Colors
+    private final String YOTEI_RED = "#D32F2F";
+    private final String YOTEI_BLACK = "#111111";
+    private final String YOTEI_WHITE = "#F5F5F5";
+
+    @Override
+    public void start(Stage primaryStage) {
+        this.window = primaryStage;
+        
+        createMainMenu();
+
+        window.setTitle("Jackaroo: Ghost of Yōtei Edition");
+        window.setScene(menuScene);
+        window.setResizable(false);
+        window.show();
+    }
+
+    // ==========================================
+    // STYLESHEET GENERATOR
+    // ==========================================
+
+    private String getBaseCSS() {
+        String css = "" +
+            ".root { -fx-background-color: radial-gradient(center 50% 50%, radius 90%, #ffffff, #d1d1d1, #8f8f8f); }\n" +
+            ".yotei-btn {\n" +
+            "    -fx-background-color: transparent;\n" +
+            "    -fx-text-fill: #111111;\n" +
+            "    -fx-font-family: 'Arial';\n" +
+            "    -fx-font-size: 16px;\n" +
+            "    -fx-font-weight: bold;\n" +
+            "    -fx-border-color: #111111;\n" +
+            "    -fx-border-width: 2px;\n" +
+            "    -fx-padding: 10 30;\n" +
+            "    -fx-cursor: hand;\n" +
+            "    -fx-transition: all 0.3s ease;\n" +
+            "}\n" +
+            ".yotei-btn:hover {\n" +
+            "    -fx-background-color: #111111;\n" +
+            "    -fx-text-fill: #ffffff;\n" +
+            "}\n" +
+            ".yotei-btn-primary {\n" +
+            "    -fx-background-color: #111111;\n" +
+            "    -fx-text-fill: #ffffff;\n" +
+            "    -fx-border-color: #111111;\n" +
+            "}\n" +
+            ".yotei-btn-primary:hover {\n" +
+            "    -fx-background-color: #D32F2F;\n" +
+            "    -fx-border-color: #D32F2F;\n" +
+            "}\n" +
+            ".yotei-log {\n" +
+            "    -fx-control-inner-background: rgba(255, 255, 255, 0.6);\n" +
+            "    -fx-background-color: transparent;\n" +
+            "    -fx-border-color: rgba(17, 17, 17, 0.3);\n" +
+            "    -fx-border-width: 1px;\n" +
+            "    -fx-font-family: 'Georgia';\n" +
+            "    -fx-font-size: 14px;\n" +
+            "    -fx-text-fill: #111111;\n" +
+            "}\n" +
+            ".yotei-log .scroll-pane { -fx-background-color: transparent; }\n" +
+            ".yotei-log .scroll-bar:vertical { -fx-background-color: transparent; -fx-pref-width: 8px; }\n" +
+            ".yotei-log .scroll-bar:vertical .thumb { -fx-background-color: rgba(17,17,17,0.4); -fx-background-radius: 0; }\n" +
+            ".dialog-pane { -fx-background-color: #F5F5F5; -fx-border-color: #111111; -fx-border-width: 2px; }\n" +
+            ".dialog-pane .label { -fx-font-family: 'Georgia'; -fx-text-fill: #111111; }\n" +
+            ".dialog-pane .button { -fx-background-color: transparent; -fx-border-color: #111111; -fx-text-fill: #111111; -fx-cursor: hand; }\n" +
+            ".dialog-pane .button:hover { -fx-background-color: #111111; -fx-text-fill: #ffffff; }";
+        return "data:text/css;base64," + Base64.getEncoder().encodeToString(css.getBytes());
+    }
+
+    // ==========================================
+    // ATMOSPHERIC EFFECTS
+    // ==========================================
+
+    private void addAshEffect(AnchorPane pane) {
+        Group ashGroup = new Group();
+        Random rand = new Random();
+        for (int i = 0; i < 60; i++) {
+            Circle ash = new Circle(rand.nextDouble() * 2 + 1, Color.rgb(200, 200, 200, rand.nextDouble() * 0.5 + 0.2));
+            ash.setEffect(new GaussianBlur(rand.nextDouble() * 2));
+            ash.setTranslateX(rand.nextDouble() * 1350);
+            ash.setTranslateY(rand.nextDouble() * 950);
+
+            Timeline fall = new Timeline(new KeyFrame(Duration.seconds(rand.nextDouble() * 10 + 5), 
+                new javafx.animation.KeyValue(ash.translateYProperty(), 1000),
+                new javafx.animation.KeyValue(ash.translateXProperty(), ash.getTranslateX() - 150)
+            ));
+            fall.setCycleCount(Animation.INDEFINITE);
+            fall.play();
+            ashGroup.getChildren().add(ash);
+        }
+        pane.getChildren().add(0, ashGroup);
+    }
+
+    // ==========================================
+    // MENU & LOADING SCREENS
+    // ==========================================
+
+    private void createMainMenu() {
+        AnchorPane root = new AnchorPane();
+        addAshEffect(root);
+
+        VBox layout = new VBox(50);
+        layout.setAlignment(Pos.CENTER);
+        AnchorPane.setTopAnchor(layout, 0.0);
+        AnchorPane.setBottomAnchor(layout, 0.0);
+        AnchorPane.setLeftAnchor(layout, 0.0);
+        AnchorPane.setRightAnchor(layout, 0.0);
+
+        Label title = new Label("J A C K A R O O");
+        title.setFont(Font.font("Georgia", FontWeight.NORMAL, 70));
+        title.setTextFill(Color.web(YOTEI_BLACK));
+        title.setEffect(new DropShadow(10, Color.web(YOTEI_WHITE)));
+
+        Button startBtn = new Button("BEGIN TALE");
+        startBtn.getStyleClass().add("yotei-btn");
+        startBtn.setOnAction(e -> triggerLoadingScreen());
+
+        Button rulesBtn = new Button("SCROLLS OF RULE");
+        rulesBtn.getStyleClass().add("yotei-btn");
+        rulesBtn.setOnAction(e -> showRulesScreen());
+
+        Button exitBtn = new Button("DEPART");
+        exitBtn.getStyleClass().add("yotei-btn");
+        exitBtn.setOnAction(e -> window.close());
+
+        layout.getChildren().addAll(title, startBtn, rulesBtn, exitBtn);
+        root.getChildren().add(layout);
+        
+        menuScene = new Scene(root, 1350, 950);
+        menuScene.getStylesheets().add(getBaseCSS());
+    }
+
+    private void showRulesScreen() {
+        AnchorPane root = new AnchorPane();
+        addAshEffect(root);
+
+        VBox layout = new VBox(30);
+        layout.setAlignment(Pos.CENTER);
+        layout.setPadding(new Insets(80));
+        AnchorPane.setTopAnchor(layout, 0.0);
+        AnchorPane.setBottomAnchor(layout, 0.0);
+        AnchorPane.setLeftAnchor(layout, 200.0);
+        AnchorPane.setRightAnchor(layout, 200.0);
+
+        Label title = new Label("THE ANCIENT PATH");
+        title.setFont(Font.font("Georgia", FontWeight.NORMAL, 40));
+        title.setTextFill(Color.web(YOTEI_BLACK));
+
+        TextArea rulesText = new TextArea();
+        rulesText.setEditable(false);
+        rulesText.setWrapText(true);
+        rulesText.getStyleClass().add("yotei-log");
+        rulesText.setText("1. Objective: Guide all 4 spirits (marbles) from Home to the Safe Zone.\n\n" +
+                "2. Fielding: Play an Ace or King to summon a spirit to the Base Cell. (Shortcut: 'F' key).\n\n" +
+                "3. Movement: Spirits travel clockwise. A '4' draws them backward. A '5' commands ANY spirit.\n\n" +
+                "4. Traps: 8 hidden shadows on the path will instantly consume a spirit.\n\n" +
+                "5. Standard Turn: Select a fate (card), select the required spirits, and click 'Play Turn'.\n\n" +
+                "If the fates offer no path, 'Discard / Skip'.");
+
+        Button backBtn = new Button("RETURN");
+        backBtn.getStyleClass().add("yotei-btn");
+        backBtn.setOnAction(e -> window.setScene(menuScene));
+
+        layout.getChildren().addAll(title, rulesText, backBtn);
+        root.getChildren().add(layout);
+        
+        Scene rulesScene = new Scene(root, 1350, 950);
+        rulesScene.getStylesheets().add(getBaseCSS());
+        window.setScene(rulesScene);
+    }
+
+    private void triggerLoadingScreen() {
+        AnchorPane root = new AnchorPane();
+        
+        VBox layout = new VBox(40);
+        layout.setAlignment(Pos.CENTER);
+        AnchorPane.setTopAnchor(layout, 0.0);
+        AnchorPane.setBottomAnchor(layout, 0.0);
+        AnchorPane.setLeftAnchor(layout, 0.0);
+        AnchorPane.setRightAnchor(layout, 0.0);
+
+        // Sumi-e style loading circle
+        Circle loader = new Circle(30, Color.TRANSPARENT);
+        loader.setStroke(Color.web(YOTEI_RED));
+        loader.setStrokeWidth(4);
+        loader.getStrokeDashArray().addAll(20d, 10d);
+
+        ScaleTransition st = new ScaleTransition(Duration.seconds(0.8), loader);
+        st.setByX(0.4f);
+        st.setByY(0.4f);
+        st.setCycleCount(4); 
+        st.setAutoReverse(true);
+
+        Label loadText = new Label("AWAKENING THE BOARD...");
+        loadText.setFont(Font.font("Georgia", FontWeight.NORMAL, 20));
+        loadText.setTextFill(Color.web(YOTEI_BLACK));
+
+        layout.getChildren().addAll(loader, loadText);
+        root.getChildren().add(layout);
+        
+        Scene loadScene = new Scene(root, 1350, 950);
+        loadScene.getStylesheets().add(getBaseCSS());
+        window.setScene(loadScene);
+
+        st.setOnFinished(e -> initializeGameEngine());
+        st.play();
+    }
+
+    // ==========================================
+    // GAME INITIALIZATION & UI SETUP
+    // ==========================================
+
+    private void initializeGameEngine() {
+        TextInputDialog dialog = new TextInputDialog("Wanderer");
+        dialog.setTitle("Identify Thyself");
+        dialog.setHeaderText(null);
+        dialog.setContentText("Enter thy name:");
+        dialog.getDialogPane().getStylesheets().add(getBaseCSS());
+
+        Optional<String> result = dialog.showAndWait();
+        String playerName = result.isPresent() && !result.get().trim().isEmpty() ? result.get() : "Wanderer";
+
+        try {
+            game = new Game(playerName);
+        } catch (IOException e) {
+            showNativeAlert(Alert.AlertType.ERROR, "Fractured Realm", "Could not decipher Cards.csv: " + e.getMessage());
+            window.setScene(menuScene);
+            return;
+        }
+
+        boardPane = new AnchorPane();
+        addAshEffect(boardPane); // Persist atmosphere into the game
+
+        setupGameUIComponents();
+        updateUI();
+
+        gameScene = new Scene(boardPane, 1350, 950);
+        gameScene.getStylesheets().add(getBaseCSS());
+
+        gameScene.setOnKeyPressed(e -> {
+            if (e.getCode() == KeyCode.F && !controlsPane.isDisabled()) {
+                try {
+                    game.fieldMarble();
+                    updateLog(game.getPlayers().get(0).getName() + " swiftly summoned a spirit to the field.");
+                    guiSelectedMarbles.clear();
+                    updateUI();
+                } catch (GameException ex) {
+                    showNativeAlert(Alert.AlertType.WARNING, "Path Blocked", ex.getMessage());
+                }
+            }
+        });
+
+        window.setScene(gameScene);
+        updateLog("The journey begins. Step carefully, " + playerName + ".");
+    }
+
+    private void setupGameUIComponents() {
+        // Subtle frosted glass backdrop for the board
+        Rectangle boardBg = new Rectangle(720, 720, Color.rgb(255, 255, 255, 0.15));
+        boardBg.setArcWidth(10); boardBg.setArcHeight(10);
+        boardBg.setStroke(Color.rgb(17, 17, 17, 0.2));
+        boardBg.setStrokeWidth(1);
+        AnchorPane.setTopAnchor(boardBg, 60.0);
+        AnchorPane.setLeftAnchor(boardBg, 220.0);
+        boardPane.getChildren().add(boardBg);
+
+        // Firepit (Discard Pile)
+        firepitPane = new StackPane();
+        Rectangle fpBg = new Rectangle(90, 130, Color.rgb(17, 17, 17, 0.1));
+        fpBg.setStroke(Color.web(YOTEI_BLACK));
+        fpBg.setStrokeWidth(1);
+        firepitPane.getChildren().add(fpBg);
+        AnchorPane.setTopAnchor(firepitPane, 355.0);
+        AnchorPane.setLeftAnchor(firepitPane, 535.0);
+        boardPane.getChildren().add(firepitPane);
+
+        // Hand Container
+        handPane = new HBox(20);
+        handPane.setAlignment(Pos.CENTER);
+        AnchorPane.setBottomAnchor(handPane, 30.0);
+        AnchorPane.setLeftAnchor(handPane, 350.0);
+        boardPane.getChildren().add(handPane);
+
+        // Controls
+        Button playBtn = new Button("EXECUTE");
+        playBtn.getStyleClass().addAll("yotei-btn", "yotei-btn-primary");
+        playBtn.setOnAction(e -> handleHumanTurn());
+
+        Button discardBtn = new Button("DISCARD");
+        discardBtn.getStyleClass().add("yotei-btn");
+        discardBtn.setOnAction(e -> handleDiscardTurn());
+
+        Button deselectBtn = new Button("DESELECT");
+        deselectBtn.getStyleClass().add("yotei-btn");
+        deselectBtn.setOnAction(e -> {
+            game.deselectAll();
+            guiSelectedMarbles.clear(); 
+            updateUI();
+        });
+
+        controlsPane = new HBox(15, playBtn, discardBtn, deselectBtn);
+        AnchorPane.setBottomAnchor(controlsPane, 50.0);
+        AnchorPane.setRightAnchor(controlsPane, 350.0);
+        boardPane.getChildren().add(controlsPane);
+
+        // Information Headers
+        turnLabel = new Label();
+        turnLabel.setFont(Font.font("Georgia", FontWeight.NORMAL, 26));
+        turnLabel.setTextFill(Color.web(YOTEI_BLACK));
+        AnchorPane.setTopAnchor(turnLabel, 30.0);
+        AnchorPane.setLeftAnchor(turnLabel, 40.0);
+
+        nextPlayerLabel = new Label();
+        nextPlayerLabel.setFont(Font.font("Arial", FontWeight.NORMAL, 14));
+        nextPlayerLabel.setTextFill(Color.rgb(17, 17, 17, 0.6));
+        AnchorPane.setTopAnchor(nextPlayerLabel, 70.0);
+        AnchorPane.setLeftAnchor(nextPlayerLabel, 40.0);
+
+        // Action Log
+        Label logTitle = new Label("CHRONICLE");
+        logTitle.setFont(Font.font("Georgia", FontWeight.NORMAL, 18));
+        logTitle.setTextFill(Color.web(YOTEI_BLACK));
+        AnchorPane.setTopAnchor(logTitle, 30.0);
+        AnchorPane.setRightAnchor(logTitle, 240.0);
+
+        logArea = new TextArea();
+        logArea.setEditable(false);
+        logArea.setWrapText(true);
+        logArea.setPrefSize(300, 700);
+        logArea.getStyleClass().add("yotei-log");
+        AnchorPane.setTopAnchor(logArea, 60.0);
+        AnchorPane.setRightAnchor(logArea, 30.0);
+
+        boardPane.getChildren().addAll(turnLabel, nextPlayerLabel, logTitle, logArea);
+    }
+
+    private void updateLog(String message) {
+        logArea.appendText("• " + message + "\n\n");
+    }
+
+    // ==========================================
+    // DRAWING THE BOARD
+    // ==========================================
+
+    private void updateUI() {
+        boardPane.getChildren().removeIf(node -> node instanceof Circle || node.getId() != null);
+        handPane.getChildren().clear();
+
+        drawTrackAndMarbles();
+        drawPlayerInfoAndCPUHands();
+        drawHumanHand();
+        updateFirepit();
+
+        turnLabel.setText("ACTIVE: " + game.getActivePlayerColour());
+        nextPlayerLabel.setText("Awaiting: " + game.getNextPlayerColour());
+    }
+
+    private void setControlsEnabled(boolean enabled) {
+        handPane.setDisable(!enabled);
+        controlsPane.setDisable(!enabled);
+    }
+
+    private void drawTrackAndMarbles() {
+        ArrayList<Cell> track = game.getBoard().getTrack();
+        for (int i = 0; i < track.size(); i++) {
+            Cell cell = track.get(i);
+            double[] coords = getCrossCoordinates(i);
+            
+            Rectangle rect = new Rectangle(coords[0], coords[1], CELL_SIZE, CELL_SIZE);
+            rect.setStroke(Color.web(YOTEI_BLACK, 0.4));
+            rect.setStrokeWidth(1.2);
+            rect.setStrokeType(StrokeType.INSIDE);
+            
+            // Minimalist muted cell coloring
+            if (cell.getCellType() == CellType.BASE) rect.setFill(Color.rgb(200, 200, 200, 0.7));
+            else if (cell.getCellType() == CellType.ENTRY) rect.setFill(Color.rgb(220, 220, 220, 0.5));
+            else if (cell.isTrap()) rect.setFill(Color.rgb(17, 17, 17, 0.8));
+            else rect.setFill(Color.rgb(255, 255, 255, 0.3));
+            
+            rect.setId("trackCell");
+            boardPane.getChildren().add(rect);
+
+            if (cell.getMarble() != null) drawMarble(cell.getMarble(), coords[0], coords[1]);
+        }
+
+        for (SafeZone zone : game.getBoard().getSafeZones()) {
+            int idx = 0;
+            for(Cell cell : zone.getCells()) {
+                double[] coords = getSafeZoneCoords(zone.getColour(), idx++);
+                Rectangle sr = new Rectangle(coords[0], coords[1], CELL_SIZE, CELL_SIZE);
+                sr.setStroke(getMutedColor(zone.getColour()));
+                sr.setStrokeWidth(1.5);
+                sr.setFill(getMutedColor(zone.getColour()).deriveColor(1,1,1,0.15));
+                sr.setId("safeCell");
+                boardPane.getChildren().add(sr);
+                
+                if(cell.getMarble() != null) drawMarble(cell.getMarble(), coords[0], coords[1]);
+            }
+        }
+
+        for (Player p : game.getPlayers()) {
+            double[] homeBase = getHomeZoneCoords(p.getColour());
+            int count = 0;
+            for (Marble m : p.getMarbles()) {
+                drawMarble(m, homeBase[0] + (count % 2) * 28, homeBase[1] + (count / 2) * 28);
+                count++;
+            }
+        }
+    }
+
+    private void drawMarble(Marble marble, double x, double y) {
+        Circle circle = new Circle(x + CELL_SIZE / 2.0, y + CELL_SIZE / 2.0, CELL_SIZE / 2.4);
+        
+        // 3D Stone Go-piece effect
+        RadialGradient grad = new RadialGradient(0, 0, 0.3, 0.3, 1, true, CycleMethod.NO_CYCLE, 
+            new Stop(0, Color.WHITE), new Stop(1, getMutedColor(marble.getColour())));
+        circle.setFill(grad);
+        circle.setStroke(Color.web(YOTEI_BLACK));
+        circle.setStrokeWidth(0.5);
+        
+        DropShadow shadow = new DropShadow(4, 2, 2, Color.rgb(0,0,0,0.4));
+        circle.setEffect(shadow);
+
+        circle.setOnMouseEntered(e -> circle.setCursor(javafx.scene.Cursor.HAND));
+        
+        circle.setOnMouseClicked(e -> {
+            if(controlsPane.isDisabled()) return; 
+            try {
+                game.selectMarble(marble);
+                guiSelectedMarbles.add(marble); 
+                
+                // Selection vermillion glow
+                DropShadow glow = new DropShadow(15, Color.web(YOTEI_RED));
+                circle.setEffect(glow);
+                circle.setStroke(Color.web(YOTEI_RED));
+                circle.setStrokeWidth(2);
+            } catch (GameException ex) {
+                showNativeAlert(Alert.AlertType.WARNING, "Invalid Selection", ex.getMessage());
+            }
+        });
+        boardPane.getChildren().add(circle);
+    }
+
+    private void drawPlayerInfoAndCPUHands() {
+        for (Player p : game.getPlayers()) {
+            double[] coords = getHomeZoneCoords(p.getColour());
+            Label nameLabel = new Label(p.getName() + "\nSouls: " + p.getHand().size());
+            nameLabel.setFont(Font.font("Georgia", FontWeight.NORMAL, 14));
+            nameLabel.setTextFill(Color.web(YOTEI_BLACK));
+            nameLabel.setId("playerLabel");
+            AnchorPane.setTopAnchor(nameLabel, coords[1] - 45);
+            AnchorPane.setLeftAnchor(nameLabel, coords[0]);
+            boardPane.getChildren().add(nameLabel);
+        }
+    }
+
+    private void drawHumanHand() {
+        Player human = game.getPlayers().get(0);
+        for (Card card : human.getHand()) {
+            StackPane cardPane = new StackPane();
+            cardPane.setPrefSize(85, 125);
+            
+            Rectangle cardBg = new Rectangle(85, 125, Color.web(YOTEI_WHITE));
+            cardBg.setArcWidth(8); cardBg.setArcHeight(8);
+            cardBg.setStroke(Color.web(YOTEI_BLACK));
+            cardBg.setStrokeWidth(1);
+            
+            DropShadow drop = new DropShadow(5, 0, 3, Color.rgb(0,0,0,0.3));
+            cardPane.setEffect(drop);
+
+            Label cardText = new Label();
+            cardText.setFont(Font.font("Georgia", FontWeight.BOLD, 14));
+            cardText.setTextFill(Color.web(YOTEI_BLACK));
+            cardText.setAlignment(Pos.CENTER);
+            cardText.setTextAlignment(TextAlignment.CENTER);
+
+            if (card instanceof Standard) {
+                Standard std = (Standard) card;
+                String suitSym = getSuitSymbol(std.getSuit());
+                cardText.setText(std.getName() + "\n\n" + suitSym);
+                if (std.getSuit() == model.card.standard.Suit.HEART || std.getSuit() == model.card.standard.Suit.DIAMOND) {
+                    cardText.setTextFill(Color.web(YOTEI_RED));
+                }
+            } else {
+                cardText.setText(card.getName() + "\n\n(Wild)");
+            }
+
+            cardPane.getChildren().addAll(cardBg, cardText);
+
+            // Hover interactions
+            ScaleTransition scaleUp = new ScaleTransition(Duration.millis(150), cardPane);
+            scaleUp.setToX(1.05); scaleUp.setToY(1.05);
+            ScaleTransition scaleDown = new ScaleTransition(Duration.millis(150), cardPane);
+            scaleDown.setToX(1.0); scaleDown.setToY(1.0);
+
+            cardPane.setOnMouseEntered(e -> {
+                cardPane.setCursor(javafx.scene.Cursor.HAND);
+                scaleUp.play();
+            });
+            cardPane.setOnMouseExited(e -> scaleDown.play());
+
+            cardPane.setOnMouseClicked(e -> {
+                try {
+                    game.selectCard(card);
+                    // Reset all
+                    handPane.getChildren().forEach(n -> {
+                        StackPane sp = (StackPane) n;
+                        ((Rectangle)sp.getChildren().get(0)).setStroke(Color.web(YOTEI_BLACK));
+                        ((Rectangle)sp.getChildren().get(0)).setStrokeWidth(1);
+                        sp.setTranslateY(0);
+                    });
+                    // Style selected
+                    cardBg.setStroke(Color.web(YOTEI_RED));
+                    cardBg.setStrokeWidth(3);
+                    
+                    TranslateTransition jump = new TranslateTransition(Duration.millis(100), cardPane);
+                    jump.setToY(-10);
+                    jump.play();
+
+                } catch (GameException ex) {
+                    showNativeAlert(Alert.AlertType.WARNING, "Selection Error", ex.getMessage());
+                }
+            });
+            handPane.getChildren().add(cardPane);
+        }
+    }
+
+    private String getSuitSymbol(model.card.standard.Suit suit) {
+        switch(suit) {
+            case HEART: return "♥";
+            case DIAMOND: return "♦";
+            case SPADE: return "♠";
+            case CLUB: return "♣";
+            default: return "";
+        }
+    }
+
+    private void updateFirepit() {
+        if (firepitPane.getChildren().size() > 1) {
+            firepitPane.getChildren().remove(1, firepitPane.getChildren().size());
+        }
+        ArrayList<Card> fp = game.getFirePit();
+        Card topCard = null;
+        for (int i = fp.size() - 1; i >= 0; i--) {
+            if (fp.get(i) != null) {
+                topCard = fp.get(i);
+                break;
+            }
+        }
+        if (topCard != null) {
+            StackPane topCardVis = new StackPane();
+            Rectangle cardBg = new Rectangle(80, 120, Color.web(YOTEI_WHITE));
+            cardBg.setStroke(Color.web(YOTEI_BLACK));
+            cardBg.setStrokeWidth(1);
+            
+            Label cardLabel = new Label(topCard.getName());
+            cardLabel.setFont(Font.font("Georgia", FontWeight.NORMAL, 12));
+            cardLabel.setTextFill(Color.web(YOTEI_BLACK));
+            
+            topCardVis.getChildren().addAll(cardBg, cardLabel);
+            topCardVis.setRotate(new Random().nextInt(10) - 5); // Slight organic rotation
+            firepitPane.getChildren().add(topCardVis);
+        }
+    }
+
+    // ==========================================
+    // ENGINE & TURN LOGIC
+    // ==========================================
+
+    private void handleHumanTurn() {
+        Player human = game.getPlayers().get(0);
+        Card selected = human.getSelectedCard();
+
+        if (selected == null) {
+            showNativeAlert(Alert.AlertType.WARNING, "Fate Unchosen", "Thou must select a card to play.");
+            return;
+        }
+
+        if (selected instanceof Seven && guiSelectedMarbles.size() == 2) {
+            ChoiceDialog<Integer> dialog = new ChoiceDialog<>(3, 1, 2, 3, 4, 5, 6);
+            dialog.setTitle("Sever the Path");
+            dialog.setHeaderText("How many steps for the first spirit?");
+            dialog.setContentText("Steps:");
+            dialog.getDialogPane().getStylesheets().add(getBaseCSS());
+            
+            Optional<Integer> result = dialog.showAndWait();
+            if (result.isPresent()) {
+                try { game.editSplitDistance(result.get()); } 
+                catch (SplitOutOfRangeException ex) { showNativeAlert(Alert.AlertType.ERROR, "Invalid Split", ex.getMessage()); return; }
+            } else return; 
+        }
+
+        try {
+            int preHomeSize = human.getMarbles().size();
+            String cardName = selected.getName();
+            
+            game.playPlayerTurn();
+            game.endPlayerTurn();
+            
+            updateLog(human.getName() + " channeled: " + cardName);
+            guiSelectedMarbles.clear();
+            updateUI();
+
+            if (human.getMarbles().size() > preHomeSize && !(selected.getName().contains("Burner"))) {
+                updateLog("THE SHADOWS STRIKE! " + human.getName() + " lost a spirit.");
+                showNativeAlert(Alert.AlertType.INFORMATION, "Shadow Trap", "A spirit stepped into darkness and returned to the void.");
+            }
+
+            Colour winner = game.checkWin();
+            if (winner != null) {
+                updateLog("THE SAGA ENDS. " + winner + " claims victory.");
+                showNativeAlert(Alert.AlertType.INFORMATION, "Victory", "The journey is complete. " + winner + " is victorious.");
+                return;
+            }
+
+            executeCPUTurns();
+
+        } catch (GameException e) {
+            showNativeAlert(Alert.AlertType.WARNING, "Forbidden Action", e.getMessage());
+            game.deselectAll();
+            guiSelectedMarbles.clear();
+            updateUI();
+        }
+    }
+    
+    private void handleDiscardTurn() {
+        Player human = game.getPlayers().get(0);
+        if (human.getSelectedCard() == null) {
+            showNativeAlert(Alert.AlertType.WARNING, "Nothing to Discard", "Select a card to throw into the fire.");
+            return;
+        }
+        updateLog(human.getName() + " cast " + human.getSelectedCard().getName() + " into the flames and waited.");
+        try { game.endPlayerTurn(); } catch (Exception ignored) {}
+        guiSelectedMarbles.clear();
+        updateUI();
+        executeCPUTurns();
+    }
+
+    private void executeCPUTurns() {
+        if (cpuTimeline != null && cpuTimeline.getStatus() == Timeline.Status.RUNNING) return;
+
+        setControlsEnabled(false); 
+
+        cpuTimeline = new Timeline();
+        KeyFrame kf = new KeyFrame(Duration.seconds(1.2), e -> {
+            Player human = game.getPlayers().get(0);
+
+            if (game.getActivePlayerColour() == human.getColour()) {
+                if (!game.canPlayTurn()) {
+                    updateLog(human.getName() + " stood still (No Cards).");
+                    try { game.endPlayerTurn(); } catch (Exception ignored) {}
+                    guiSelectedMarbles.clear();
+                    updateUI();
+                } else {
+                    setControlsEnabled(true);
+                    cpuTimeline.stop();
+                }
+            } else {
+                Player active = null;
+                for (Player p : game.getPlayers()) if (p.getColour() == game.getActivePlayerColour()) active = p;
+                
+                if (active instanceof CPU) {
+                    if (game.canPlayTurn()) {
+                        try { active.play(); } catch (Exception ignored) {}
+                    }
+                    try { game.endPlayerTurn(); } catch (Exception ignored) {}
+                    updateUI();
+
+                    ArrayList<Card> fp = game.getFirePit();
+                    String actionCard = "Shadows";
+                    for (int i = fp.size() - 1; i >= 0; i--) {
+                        if (fp.get(i) != null) { actionCard = fp.get(i).getName(); break; }
+                    }
+                    updateLog(active.getName() + " moved in silence. (Used: " + actionCard + ")");
+
+                    Colour winner = game.checkWin();
+                    if (winner != null) {
+                        updateLog("THE SAGA ENDS. " + winner + " claims victory.");
+                        showNativeAlert(Alert.AlertType.INFORMATION, "Victory", winner + " has claimed the realm.");
+                        cpuTimeline.stop();
+                    }
+                }
+            }
+        });
+        
+        cpuTimeline.getKeyFrames().add(kf);
+        cpuTimeline.setCycleCount(Timeline.INDEFINITE);
+        cpuTimeline.play();
+    }
+
+    // --- Native Alert Wrapper ---
+    private void showNativeAlert(Alert.AlertType type, String title, String content) {
+        Alert alert = new Alert(type);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(content);
+        alert.getDialogPane().getStylesheets().add(getBaseCSS());
+        alert.showAndWait();
+    }
+
+    // --- Mathematical Layout Helpers ---
+    private double[] getCrossCoordinates(int index) {
+        int side = index / 25;
+        int pos = index % 25;
+        double x = 270, y = 110; 
+        if(side == 0) { x += pos * CELL_SIZE; y = 110; }
+        else if(side == 1) { x = 270 + 25 * CELL_SIZE; y = 110 + pos * CELL_SIZE; }
+        else if(side == 2) { x = 270 + (25 - pos) * CELL_SIZE; y = 110 + 25 * CELL_SIZE; }
+        else if(side == 3) { x = 270; y = 110 + (25 - pos) * CELL_SIZE; }
+        return new double[]{x, y};
+    }
+
+    private double[] getSafeZoneCoords(Colour c, int idx) {
+        double[] base = getCrossCoordinates(getEngineBaseOffset(c));
+        return new double[]{base[0] + 30, base[1] + 30 + (idx * CELL_SIZE)}; 
+    }
+
+    private double[] getHomeZoneCoords(Colour c) {
+        switch(c) {
+            case RED: return new double[]{240, 130};
+            case BLUE: return new double[]{810, 130};
+            case GREEN: return new double[]{810, 680};
+            case YELLOW: return new double[]{240, 680};
+            default: return new double[]{0,0};
+        }
+    }
+
+    private int getEngineBaseOffset(Colour c) {
+        for(int i = 0; i < game.getBoard().getSafeZones().size(); i++) {
+            if(game.getBoard().getSafeZones().get(i).getColour() == c) return i * 25;
+        }
+        return 0;
+    }
+
+    private Color getMutedColor(Colour c) {
+        switch (c) {
+            case RED: return Color.web("#B71C1C"); // Deep Vermillion
+            case BLUE: return Color.web("#1A237E"); // Ink Blue
+            case GREEN: return Color.web("#1B5E20"); // Pine Green
+            case YELLOW: return Color.web("#F57F17"); // Darkened Gold
+            default: return Color.web(YOTEI_BLACK);
+        }
+    }
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+}

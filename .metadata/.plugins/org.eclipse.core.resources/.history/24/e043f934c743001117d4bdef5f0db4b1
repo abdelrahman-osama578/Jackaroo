@@ -1,0 +1,1339 @@
+package view;
+
+import engine.Game;
+import engine.board.Cell;
+import engine.board.CellType;
+import engine.board.SafeZone;
+import exception.GameException;
+import exception.SplitOutOfRangeException;
+import javafx.animation.*;
+import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.TextArea;
+import javafx.scene.effect.*;
+import javafx.scene.input.KeyCode;
+import javafx.scene.layout.*;
+import javafx.scene.paint.*;
+import javafx.scene.shape.*;
+import javafx.scene.text.*;
+import javafx.stage.Stage;
+import javafx.util.Duration;
+import model.Colour;
+import model.card.Card;
+import model.card.standard.Seven;
+import model.card.standard.Standard;
+import model.player.CPU;
+import model.player.Marble;
+import model.player.Player;
+
+import javax.swing.JOptionPane;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Random;
+
+/**
+ * JackarooGUI — Ghost of Yōtei–inspired redesign.
+ *
+ * Design language:
+ *  · Pale parchment / mist-grey ground  (#E9E6E0 → #C8C4BC)
+ *  · Deep sumi ink blacks (#1A1714) for type
+ *  · Burnished gold / amber accents (#C8A030)
+ *  · Sparse crimson highlights (#8B1A1A)
+ *  · Wide-tracked spaced uppercase labels
+ *  · Ink-brush stroke dividers and selection highlights
+ *  · Diamond-rotated cell tiles
+ *  · Atmospheric particle / mist layer drawn on a Canvas
+ *  · Fade / slide / scale transitions everywhere
+ */
+public class JackarooGUI extends Application {
+
+    // ── Palette ───────────────────────────────────────────────────────────────
+    private static final String C_PARCHMENT   = "#E9E6E0";
+    private static final String C_MIST        = "#D4D0C8";
+    private static final String C_INK         = "#1A1714";
+    private static final String C_INK_LIGHT   = "#3A3530";
+    private static final String C_GOLD        = "#C8A030";
+    private static final String C_GOLD_DARK   = "#8A6E1A";
+    private static final String C_CRIMSON     = "#8B1A1A";
+    private static final String C_TRACK_CELL  = "#DEDBD4";
+    private static final String C_TRACK_BRD   = "#B0ADA6";
+
+    private static final double W = 1350, H = 950;
+    private static final int    CELL_SIZE = 20;
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    private Stage  window;
+    private Scene  menuScene, gameScene;
+    private Game   game;
+
+    private AnchorPane boardPane;
+    private HBox        handPane;
+    private HBox        controlsPane;
+    private Label       turnLabel;
+    private Label       nextPlayerLabel;
+    private StackPane   firepitPane;
+    private TextArea    logArea;
+    private Canvas      mistCanvas;
+    private Timeline    cpuTimeline;
+    private Timeline    mistTimeline;
+
+    private final ArrayList<Marble> guiSelectedMarbles = new ArrayList<>();
+    private final Random rng = new Random();
+
+    // ── Mist particles ────────────────────────────────────────────────────────
+    private final float[] px   = new float[120];
+    private final float[] py   = new float[120];
+    private final float[] pdx  = new float[120];
+    private final float[] pdy  = new float[120];
+    private final float[] palp = new float[120];
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // APPLICATION ENTRY
+    // ═════════════════════════════════════════════════════════════════════════
+
+    @Override
+    public void start(Stage primaryStage) {
+        this.window = primaryStage;
+        createMainMenu();
+        window.setTitle("JACKAROO  ·  A NEW GAME SPIN");
+        window.setScene(menuScene);
+        window.setResizable(false);
+        window.show();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // MAIN MENU
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void createMainMenu() {
+        StackPane root = new StackPane();
+
+        // ── Background gradient (parchment → warm ash) ──
+        Rectangle bg = new Rectangle(W, H);
+        bg.setFill(new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.web("#F0EDE7")),
+            new Stop(0.55, Color.web("#D8D4CC")),
+            new Stop(1,  Color.web("#C4C0B8"))));
+        root.getChildren().add(bg);
+
+        // ── Mist canvas ──
+        Canvas mist = buildMistCanvas((int)W, (int)H);
+        root.getChildren().add(mist);
+
+        // ── Ink-wash vertical accent band (right side, like a brush stroke) ──
+        Rectangle inkBand = new Rectangle(420, H);
+        inkBand.setFill(new LinearGradient(0, 0, 1, 0, true, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.TRANSPARENT),
+            new Stop(0.3, Color.web("#1A1714", 0.06)),
+            new Stop(0.7, Color.web("#1A1714", 0.12)),
+            new Stop(1,   Color.web("#1A1714", 0.18))));
+        StackPane.setAlignment(inkBand, Pos.CENTER_RIGHT);
+        root.getChildren().add(inkBand);
+
+        // ── Horizontal ink dividers ──
+        root.getChildren().addAll(
+            hRule(W * 0.08, H * 0.18, W * 0.55),
+            hRule(W * 0.08, H * 0.82, W * 0.55)
+        );
+
+        // ── Content layout ──
+        VBox content = new VBox(0);
+        content.setAlignment(Pos.CENTER_LEFT);
+        content.setPadding(new Insets(0, 0, 0, W * 0.08));
+        content.setPickOnBounds(false);
+        StackPane.setAlignment(content, Pos.CENTER_LEFT);
+
+        // Sub-title
+        Label sub = new Label("BOARD GAME");
+        sub.setFont(trackedFont(14));
+        sub.setTextFill(Color.web(C_GOLD));
+        sub.setPadding(new Insets(0, 0, 12, 4));
+
+        // Title
+        Label title = new Label("JACKAROO");
+        title.setFont(Font.font("Georgia", FontWeight.BOLD, 96));
+        title.setTextFill(Color.web(C_INK));
+        // Subtle drop shadow like the ink rendering in GoY
+        DropShadow ds = new DropShadow(4, 2, 2, Color.web("#00000030"));
+        title.setEffect(ds);
+
+        // Brush-stroke underline for title
+        Canvas brushStroke = makeBrushStroke(480, 14);
+        brushStroke.setTranslateY(-4);
+
+        VBox.setMargin(sub,         new Insets(80, 0, 0, 0));
+        VBox.setMargin(brushStroke, new Insets(0,  0, 50, 0));
+
+        // Menu items
+        VBox menu = new VBox(0);
+        menu.setAlignment(Pos.CENTER_LEFT);
+
+        String[][] items = {
+            {"BEGIN GAME",   C_GOLD},
+            {"VIEW RULES",   C_INK_LIGHT},
+            {"QUIT",         C_INK_LIGHT}
+        };
+        Label[] menuLabels = new Label[3];
+        for (int i = 0; i < items.length; i++) {
+            final int idx = i;
+            Label lbl = buildMenuEntry(items[i][0], items[i][1], i == 0);
+            menuLabels[i] = lbl;
+            lbl.setOnMouseClicked(e -> {
+                switch(idx) {
+                    case 0: triggerLoadingScreen(); break;
+                    case 1: showRulesScreen(); break;
+                    case 2: window.close(); break;
+                }
+            });
+            menu.getChildren().add(lbl);
+            if (i < items.length - 1) {
+                Line sep = new Line(0, 0, 280, 0);
+                sep.setStroke(Color.web(C_TRACK_BRD, 0.7));
+                sep.setStrokeWidth(0.8);
+                VBox.setMargin(sep, new Insets(0, 0, 0, 0));
+                menu.getChildren().add(sep);
+            }
+        }
+
+        content.getChildren().addAll(sub, title, brushStroke, menu);
+
+        // ── Decorative diamond cluster (GoY diamond-grid motif) ──
+        root.getChildren().add(buildDiamondCluster());
+
+        // ── Kanji-style vertical label on far right ──
+        Label vertLabel = new Label("一");  // "One" – decorative
+        vertLabel.setFont(Font.font("serif", 72));
+        vertLabel.setTextFill(Color.web(C_INK, 0.08));
+        vertLabel.setRotate(0);
+        StackPane.setAlignment(vertLabel, Pos.CENTER_RIGHT);
+        vertLabel.setTranslateX(-30);
+        root.getChildren().add(vertLabel);
+
+        root.getChildren().add(content);
+
+        menuScene = new Scene(root, W, H);
+
+        // Entrance animation – stagger fade-in
+        content.setOpacity(0);
+        FadeTransition ft = new FadeTransition(Duration.millis(900), content);
+        ft.setToValue(1);
+        ft.setDelay(Duration.millis(300));
+        ft.play();
+    }
+
+    /** Single menu item in GoY style: wide-tracked caps, gold accent bar on left when selected */
+    private Label buildMenuEntry(String text, String colorHex, boolean selected) {
+        Label lbl = new Label(text);
+        lbl.setFont(trackedFont(18));
+        lbl.setTextFill(Color.web(colorHex));
+        lbl.setPadding(new Insets(18, 40, 18, selected ? 22 : 24));
+        lbl.setCursor(javafx.scene.Cursor.HAND);
+
+        if (selected) {
+            // Gold left-bar accent (brush stroke feel)
+            lbl.setStyle(
+                "-fx-border-color: " + C_GOLD + " transparent transparent transparent;" +
+                "-fx-border-width: 0 0 0 3;" +
+                "-fx-padding: 18 40 18 22;"
+            );
+        }
+
+        // Hover effect
+        lbl.setOnMouseEntered(e -> {
+            lbl.setTextFill(Color.web(C_GOLD));
+            ScaleTransition st = new ScaleTransition(Duration.millis(150), lbl);
+            st.setToX(1.03); st.setToY(1.03); st.play();
+        });
+        lbl.setOnMouseExited(e -> {
+            lbl.setTextFill(Color.web(colorHex));
+            ScaleTransition st = new ScaleTransition(Duration.millis(150), lbl);
+            st.setToX(1.0); st.setToY(1.0); st.play();
+        });
+
+        return lbl;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // RULES SCREEN
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void showRulesScreen() {
+        StackPane root = new StackPane();
+        root.setStyle("-fx-background-color: " + C_PARCHMENT + ";");
+
+        // Soft gradient bg
+        Rectangle bg = new Rectangle(W, H);
+        bg.setFill(new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.web("#F2EFE9")),
+            new Stop(1, Color.web("#C8C4BC"))));
+        root.getChildren().add(bg);
+
+        // Mist
+        root.getChildren().add(buildMistCanvas((int)W, (int)H));
+
+        VBox layout = new VBox(32);
+        layout.setAlignment(Pos.TOP_LEFT);
+        layout.setPadding(new Insets(80, 120, 60, 120));
+
+        // Header
+        Label header = new Label("BUSHIDŌ OF JACKAROO");
+        header.setFont(trackedFont(11));
+        header.setTextFill(Color.web(C_GOLD));
+
+        Label title = new Label("Game Rules");
+        title.setFont(Font.font("Georgia", FontWeight.BOLD, 52));
+        title.setTextFill(Color.web(C_INK));
+
+        root.getChildren().add(hRule(0, 0, 0)); // dummy
+        Canvas stroke = makeBrushStroke(360, 12);
+
+        // Rules as styled labels (GoY shows info as clean typeset text, no boxes)
+        VBox rulesList = new VBox(20);
+        String[][] rules = {
+            {"I.",  "OBJECTIVE",   "Move all 4 marbles from Home Zone to your Safe Zone to claim victory."},
+            {"II.", "FIELDING",    "Play an Ace or King to deploy a marble onto your Base Cell. Press [F] as a field shortcut."},
+            {"III.","MOVEMENT",    "Marbles advance clockwise. A Four card moves backward 4 steps. A Five card moves any marble."},
+            {"IV.", "TRAPS",       "Eight hidden trap cells lurk on the board — landing on one sends your marble home instantly."},
+            {"V.",  "TURN FLOW",   "Select a card, select the required marble(s), then confirm with Play Turn."},
+            {"VI.", "SKIP",        "If no valid move exists, select any card and use Discard / Skip to pass your turn."}
+        };
+        for (String[] rule : rules) {
+            HBox row = new HBox(20);
+            row.setAlignment(Pos.TOP_LEFT);
+
+            Label num = new Label(rule[0]);
+            num.setFont(Font.font("Georgia", FontWeight.BOLD, 14));
+            num.setTextFill(Color.web(C_GOLD));
+            num.setMinWidth(36);
+
+            VBox textCol = new VBox(3);
+            Label rTitle = new Label(rule[1]);
+            rTitle.setFont(trackedFont(11));
+            rTitle.setTextFill(Color.web(C_INK));
+
+            Label rBody = new Label(rule[2]);
+            rBody.setFont(Font.font("Georgia", 15));
+            rBody.setTextFill(Color.web(C_INK_LIGHT));
+            rBody.setWrapText(true);
+            rBody.setMaxWidth(700);
+
+            textCol.getChildren().addAll(rTitle, rBody);
+            row.getChildren().addAll(num, textCol);
+            rulesList.getChildren().add(row);
+        }
+
+        Button back = buildActionButton("← RETURN", C_INK);
+        back.setOnAction(e -> {
+            FadeTransition ft = new FadeTransition(Duration.millis(350), root);
+            ft.setToValue(0);
+            ft.setOnFinished(ev -> window.setScene(menuScene));
+            ft.play();
+        });
+
+        layout.getChildren().addAll(header, title, stroke, rulesList, back);
+        root.getChildren().add(layout);
+
+        Scene rulesScene = new Scene(root, W, H);
+        window.setScene(rulesScene);
+        root.setOpacity(0);
+        FadeTransition ft = new FadeTransition(Duration.millis(600), root);
+        ft.setToValue(1); ft.play();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // LOADING SCREEN
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void triggerLoadingScreen() {
+        StackPane root = new StackPane();
+        Rectangle bg = new Rectangle(W, H);
+        bg.setFill(new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.web("#F0EDE7")),
+            new Stop(1, Color.web("#C0BDB6"))));
+        root.getChildren().add(bg);
+        root.getChildren().add(buildMistCanvas((int)W, (int)H));
+
+        // Diamond spinner (GoY uses diamond shapes as icons)
+        Polygon diamond = new Polygon(0.0, -28.0, 20.0, 0.0, 0.0, 28.0, -20.0, 0.0);
+        diamond.setFill(Color.TRANSPARENT);
+        diamond.setStroke(Color.web(C_GOLD));
+        diamond.setStrokeWidth(2);
+        RotateTransition rt = new RotateTransition(Duration.seconds(1.6), diamond);
+        rt.setByAngle(360); rt.setCycleCount(Animation.INDEFINITE);
+        rt.setInterpolator(Interpolator.LINEAR); rt.play();
+
+        // Inner diamond counter-spin
+        Polygon inner = new Polygon(0.0, -14.0, 10.0, 0.0, 0.0, 14.0, -10.0, 0.0);
+        inner.setFill(Color.web(C_GOLD, 0.35));
+        inner.setStroke(Color.web(C_GOLD, 0.6));
+        inner.setStrokeWidth(1.5);
+        RotateTransition rt2 = new RotateTransition(Duration.seconds(0.9), inner);
+        rt2.setByAngle(-360); rt2.setCycleCount(Animation.INDEFINITE);
+        rt2.setInterpolator(Interpolator.LINEAR); rt2.play();
+
+        StackPane spinner = new StackPane(diamond, inner);
+        spinner.setPrefSize(60, 60);
+
+        Label loadText = new Label("INITIALIZING  ·  PLEASE WAIT");
+        loadText.setFont(trackedFont(11));
+        loadText.setTextFill(Color.web(C_INK, 0.7));
+
+        // Pulsing opacity for text
+        FadeTransition ftText = new FadeTransition(Duration.seconds(0.9), loadText);
+        ftText.setFromValue(0.4); ftText.setToValue(1.0);
+        ftText.setCycleCount(Animation.INDEFINITE); ftText.setAutoReverse(true); ftText.play();
+
+        VBox center = new VBox(24, spinner, loadText);
+        center.setAlignment(Pos.CENTER);
+        root.getChildren().add(center);
+
+        Scene loadScene = new Scene(root, W, H);
+        window.setScene(loadScene);
+
+        // Auto-advance after 2s
+        Timeline tl = new Timeline(new KeyFrame(Duration.seconds(2.0), e -> initializeGameEngine()));
+        tl.play();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // GAME INIT
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void initializeGameEngine() {
+        String input = JOptionPane.showInputDialog(null,
+            "Enter your warrior's name:", "Identity", JOptionPane.QUESTION_MESSAGE);
+        String playerName = (input != null && !input.trim().isEmpty()) ? input.trim() : "Ronin";
+
+        try {
+            game = new Game(playerName);
+        } catch (IOException e) {
+            showAlert(JOptionPane.ERROR_MESSAGE, "Error", "Could not load Cards.csv: " + e.getMessage());
+            window.setScene(menuScene);
+            return;
+        }
+
+        boardPane = new AnchorPane();
+
+        // ── Base background ──
+        Rectangle bg = new Rectangle(W, H);
+        bg.setFill(new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
+            new Stop(0,   Color.web("#EDEAE4")),
+            new Stop(0.5, Color.web("#DEDAD2")),
+            new Stop(1,   Color.web("#C8C4BC"))));
+        boardPane.getChildren().add(bg);
+
+        // ── Mist / atmospheric canvas ──
+        mistCanvas = buildMistCanvas((int)W, (int)H);
+        boardPane.getChildren().add(mistCanvas);
+
+        // ── Ink-band: right panel backdrop ──
+        Rectangle rightPanel = new Rectangle(310, H);
+        rightPanel.setFill(new LinearGradient(0, 0, 1, 0, true, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.web("#1A1714", 0.0)),
+            new Stop(0.15, Color.web("#1A1714", 0.06)),
+            new Stop(1,   Color.web("#1A1714", 0.14))));
+        AnchorPane.setRightAnchor(rightPanel, 0.0);
+        AnchorPane.setTopAnchor(rightPanel, 0.0);
+        boardPane.getChildren().add(rightPanel);
+
+        setupGameUIComponents();
+        updateUI();
+
+        gameScene = new Scene(boardPane, W, H);
+
+        gameScene.setOnKeyPressed(e -> {
+            if (e.getCode() == KeyCode.F && !controlsPane.isDisabled()) {
+                try {
+                    game.fieldMarble();
+                    updateLog(game.getPlayers().get(0).getName() + "  ·  fielded a marble [F]");
+                    guiSelectedMarbles.clear();
+                    updateUI();
+                } catch (GameException ex) {
+                    showAlert(JOptionPane.WARNING_MESSAGE, "Cannot Field", ex.getMessage());
+                }
+            }
+        });
+
+        window.setScene(gameScene);
+        updateLog("The game has begun. Welcome, " + playerName + ".");
+
+        // Entrance fade
+        boardPane.setOpacity(0);
+        FadeTransition ft = new FadeTransition(Duration.millis(700), boardPane);
+        ft.setToValue(1); ft.play();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // GAME UI SETUP
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void setupGameUIComponents() {
+
+        // ── Board area background (parchment panel with ink border) ──
+        Rectangle boardBg = new Rectangle(720, 720);
+        boardBg.setFill(new LinearGradient(0, 0, 1, 1, true, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.web("#EFECEA", 0.9)),
+            new Stop(1, Color.web("#D8D4CC", 0.9))));
+        boardBg.setStroke(Color.web(C_INK, 0.18));
+        boardBg.setStrokeWidth(1.5);
+        boardBg.setArcWidth(8); boardBg.setArcHeight(8);
+        DropShadow shadow = new DropShadow(20, 0, 4, Color.web("#00000022"));
+        boardBg.setEffect(shadow);
+        AnchorPane.setTopAnchor(boardBg, 80.0);
+        AnchorPane.setLeftAnchor(boardBg, 160.0);
+        boardPane.getChildren().add(boardBg);
+
+        // ── Fire pit ──
+        firepitPane = new StackPane();
+        firepitPane.setPrefSize(90, 130);
+        // Styled as a GoY tooltip/card element
+        Rectangle fpBg = new Rectangle(90, 130);
+        fpBg.setFill(new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.web("#2A2420")),
+            new Stop(1, Color.web("#1A1410"))));
+        fpBg.setStroke(Color.web(C_GOLD, 0.6));
+        fpBg.setStrokeWidth(1.2);
+        fpBg.setArcWidth(4); fpBg.setArcHeight(4);
+        Label fpLabel = new Label("FIRE\nPIT");
+        fpLabel.setFont(trackedFont(8));
+        fpLabel.setTextFill(Color.web(C_GOLD, 0.5));
+        fpLabel.setAlignment(Pos.CENTER);
+        fpLabel.setTextAlignment(TextAlignment.CENTER);
+        firepitPane.getChildren().addAll(fpBg, fpLabel);
+        AnchorPane.setTopAnchor(firepitPane, 370.0);
+        AnchorPane.setLeftAnchor(firepitPane, 505.0);
+        boardPane.getChildren().add(firepitPane);
+
+        // ── Hand area ──
+        handPane = new HBox(12);
+        handPane.setAlignment(Pos.CENTER);
+        AnchorPane.setBottomAnchor(handPane, 18.0);
+        AnchorPane.setLeftAnchor(handPane, 165.0);
+        AnchorPane.setRightAnchor(handPane, 340.0);
+        boardPane.getChildren().add(handPane);
+
+        // ── Control buttons ──
+        Button playBtn = buildActionButton("PLAY  TURN", C_GOLD);
+        playBtn.setOnAction(e -> handleHumanTurn());
+
+        Button discardBtn = buildActionButton("DISCARD  ·  SKIP", C_INK_LIGHT);
+        discardBtn.setOnAction(e -> handleDiscardTurn());
+
+        Button deselectBtn = buildActionButton("DESELECT  ALL", C_CRIMSON);
+        deselectBtn.setOnAction(e -> {
+            game.deselectAll();
+            guiSelectedMarbles.clear();
+            updateUI();
+        });
+
+        controlsPane = new HBox(12, playBtn, discardBtn, deselectBtn);
+        controlsPane.setAlignment(Pos.CENTER_LEFT);
+        AnchorPane.setBottomAnchor(controlsPane, 110.0);
+        AnchorPane.setLeftAnchor(controlsPane, 170.0);
+        boardPane.getChildren().add(controlsPane);
+
+        // ── Info labels ──
+        Label turnHead = new Label("ACTIVE  WARRIOR");
+        turnHead.setFont(trackedFont(9));
+        turnHead.setTextFill(Color.web(C_GOLD));
+
+        turnLabel = new Label("—");
+        turnLabel.setFont(Font.font("Georgia", FontWeight.BOLD, 22));
+        turnLabel.setTextFill(Color.web(C_INK));
+
+        Label nextHead = new Label("UP  NEXT");
+        nextHead.setFont(trackedFont(9));
+        nextHead.setTextFill(Color.web(C_INK, 0.45));
+
+        nextPlayerLabel = new Label("—");
+        nextPlayerLabel.setFont(Font.font("Georgia", 16));
+        nextPlayerLabel.setTextFill(Color.web(C_INK, 0.6));
+
+        VBox infoBox = new VBox(2, turnHead, turnLabel,
+            buildInlineSep(180), nextHead, nextPlayerLabel);
+        infoBox.setPadding(new Insets(0));
+        AnchorPane.setTopAnchor(infoBox, 24.0);
+        AnchorPane.setLeftAnchor(infoBox, 20.0);
+        boardPane.getChildren().add(infoBox);
+
+        // ── Right panel: Action Log ──
+        buildLogPanel();
+
+        // ── Decorative corner diamonds ──
+        boardPane.getChildren().addAll(
+            cornerDiamond(170, 90, 8),
+            cornerDiamond(870, 90, 8),
+            cornerDiamond(170, 790, 8),
+            cornerDiamond(870, 790, 8)
+        );
+    }
+
+    private void buildLogPanel() {
+        // Header
+        Label logHeader = new Label("ACTION  LOG");
+        logHeader.setFont(trackedFont(10));
+        logHeader.setTextFill(Color.web(C_GOLD));
+
+        Canvas logStroke = makeBrushStroke(220, 10);
+
+        logArea = new TextArea();
+        logArea.setEditable(false);
+        logArea.setWrapText(true);
+        logArea.setPrefSize(280, 720);
+        logArea.setStyle(
+            "-fx-control-inner-background: transparent;" +
+            "-fx-background-color: transparent;" +
+            "-fx-text-fill: " + C_INK + ";" +
+            "-fx-font-family: 'Georgia';" +
+            "-fx-font-size: 13px;" +
+            "-fx-border-color: transparent;"
+        );
+
+        VBox logBox = new VBox(10, logHeader, logStroke, logArea);
+        logBox.setPadding(new Insets(22, 16, 16, 22));
+        AnchorPane.setTopAnchor(logBox, 40.0);
+        AnchorPane.setRightAnchor(logBox, 0.0);
+        boardPane.getChildren().add(logBox);
+
+        // Thin ink separator between board and log
+        Line sep = new Line(0, 40, 0, H - 40);
+        sep.setStroke(Color.web(C_INK, 0.12));
+        sep.setStrokeWidth(1);
+        AnchorPane.setRightAnchor(sep, 305.0);
+        boardPane.getChildren().add(sep);
+    }
+
+    private void updateLog(String message) {
+        logArea.appendText("·  " + message + "\n\n");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // BOARD DRAWING
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void updateUI() {
+        boardPane.getChildren().removeIf(n ->
+            n instanceof Circle ||
+            (n.getId() != null && (n.getId().startsWith("trackCell") ||
+                                    n.getId().startsWith("marbLabel") ||
+                                    n.getId().startsWith("safeCell")  ||
+                                    n.getId().startsWith("homeMarble")||
+                                    n.getId().startsWith("playerInfo"))));
+        handPane.getChildren().clear();
+
+        drawTrackAndMarbles();
+        drawPlayerInfoPanels();
+        drawHumanHand();
+        updateFirepit();
+
+        // Update labels with fade
+        String active = game.getActivePlayerColour().toString();
+        String next   = game.getNextPlayerColour().toString();
+        fadeText(turnLabel,       toDisplayName(active));
+        fadeText(nextPlayerLabel, toDisplayName(next));
+    }
+
+    private void fadeText(Label lbl, String newText) {
+        FadeTransition out = new FadeTransition(Duration.millis(120), lbl);
+        out.setToValue(0);
+        out.setOnFinished(e -> {
+            lbl.setText(newText);
+            FadeTransition in = new FadeTransition(Duration.millis(200), lbl);
+            in.setToValue(1); in.play();
+        });
+        out.play();
+    }
+
+    private String toDisplayName(String colour) {
+        switch (colour) {
+            case "RED":    return "Red  Clan";
+            case "BLUE":   return "Blue  Clan";
+            case "GREEN":  return "Green  Clan";
+            case "YELLOW": return "Gold  Clan";
+            default:       return colour;
+        }
+    }
+
+    private void setControlsEnabled(boolean enabled) {
+        handPane.setDisable(!enabled);
+        controlsPane.setDisable(!enabled);
+    }
+
+    private void drawTrackAndMarbles() {
+        ArrayList<Cell> track = game.getBoard().getTrack();
+        for (int i = 0; i < track.size(); i++) {
+            Cell cell = track.get(i);
+            double[] coords = getCrossCoordinates(i);
+            drawCell(cell, coords[0], coords[1], i);
+            if (cell.getMarble() != null)
+                drawMarble(cell.getMarble(), coords[0], coords[1]);
+        }
+
+        for (SafeZone zone : game.getBoard().getSafeZones()) {
+            int idx = 0;
+            for (Cell cell : zone.getCells()) {
+                double[] coords = getSafeZoneCoords(zone.getColour(), idx++);
+                drawSafeCell(cell, zone.getColour(), coords[0], coords[1]);
+                if (cell.getMarble() != null)
+                    drawMarble(cell.getMarble(), coords[0], coords[1]);
+            }
+        }
+
+        for (Player p : game.getPlayers()) {
+            double[] homeBase = getHomeZoneCoords(p.getColour());
+            int count = 0;
+            for (Marble m : p.getMarbles()) {
+                double mx = homeBase[0] + (count % 2) * 26;
+                double my = homeBase[1] + (count / 2) * 26;
+                drawHomeMarble(m, mx, my);
+                count++;
+            }
+        }
+    }
+
+    /** Draw a board cell as a GoY-styled tile (small square with ink border) */
+    private void drawCell(Cell cell, double x, double y, int trackIndex) {
+        Rectangle rect = new Rectangle(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+        rect.setArcWidth(2); rect.setArcHeight(2);
+
+        if (cell.getCellType() == CellType.BASE) {
+            rect.setFill(Color.web("#D4C88A", 0.6)); // warm gold tint
+            rect.setStroke(Color.web(C_GOLD, 0.8));
+        } else if (cell.getCellType() == CellType.ENTRY) {
+            rect.setFill(Color.web("#C8D4A0", 0.6)); // pale moss
+            rect.setStroke(Color.web("#7A9A30", 0.7));
+        } else if (cell.isTrap()) {
+            rect.setFill(Color.web("#2A1A18", 0.25)); // dark crimson hint
+            rect.setStroke(Color.web(C_CRIMSON, 0.5));
+        } else {
+            rect.setFill(Color.web(C_TRACK_CELL, 0.8));
+            rect.setStroke(Color.web(C_TRACK_BRD, 0.5));
+        }
+        rect.setStrokeWidth(1);
+        rect.setId("trackCell_" + trackIndex);
+        boardPane.getChildren().add(rect);
+    }
+
+    /** Safe zone cells: tinted with player colour, semi-transparent */
+    private void drawSafeCell(Cell cell, Colour colour, double x, double y) {
+        Rectangle sr = new Rectangle(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+        sr.setArcWidth(2); sr.setArcHeight(2);
+        Color base = getJavaColor(colour);
+        sr.setFill(new Color(base.getRed(), base.getGreen(), base.getBlue(), 0.22));
+        sr.setStroke(new Color(base.getRed(), base.getGreen(), base.getBlue(), 0.55));
+        sr.setStrokeWidth(1.2);
+        sr.setId("safeCell");
+        boardPane.getChildren().add(sr);
+    }
+
+    /** Marble drawn as a gem-like circle with inner highlight and colour glow */
+    private void drawMarble(Marble marble, double x, double y) {
+        double cx = x + CELL_SIZE / 2.0;
+        double cy = y + CELL_SIZE / 2.0;
+        double r  = CELL_SIZE / 2.2;
+
+        Color base   = getJavaColor(marble.getColour());
+        Color bright = base.brighter().brighter();
+
+        // Outer glow
+        Circle glow = new Circle(cx, cy, r + 3);
+        glow.setFill(new Color(base.getRed(), base.getGreen(), base.getBlue(), 0.15));
+
+        // Main marble body
+        Circle body = new Circle(cx, cy, r);
+        body.setFill(new RadialGradient(
+            -45, 0.6, cx - r * 0.3, cy - r * 0.3, r * 1.2, false, CycleMethod.NO_CYCLE,
+            new Stop(0,   bright),
+            new Stop(0.5, base),
+            new Stop(1,   base.darker())
+        ));
+        body.setStroke(Color.web(C_INK, 0.4));
+        body.setStrokeWidth(0.8);
+
+        // Inner highlight
+        Circle highlight = new Circle(cx - r * 0.3, cy - r * 0.3, r * 0.28);
+        highlight.setFill(Color.web("#FFFFFF", 0.55));
+
+        boolean isSelected = guiSelectedMarbles.contains(marble);
+        if (isSelected) {
+            body.setStroke(Color.web(C_GOLD));
+            body.setStrokeWidth(2.5);
+            DropShadow sel = new DropShadow(8, Color.web(C_GOLD, 0.7));
+            body.setEffect(sel);
+        }
+
+        body.setOnMouseClicked(e -> {
+            if (controlsPane.isDisabled()) return;
+            try {
+                game.selectMarble(marble);
+                guiSelectedMarbles.add(marble);
+                // Pulse animation on selection
+                ScaleTransition st = new ScaleTransition(Duration.millis(180), body);
+                st.setFromX(1.0); st.setToX(1.25);
+                st.setFromY(1.0); st.setToY(1.25);
+                st.setAutoReverse(true); st.setCycleCount(2); st.play();
+                updateUI();
+            } catch (GameException ex) {
+                showAlert(JOptionPane.WARNING_MESSAGE, "Invalid", ex.getMessage());
+            }
+        });
+        body.setCursor(javafx.scene.Cursor.HAND);
+
+        boardPane.getChildren().addAll(glow, body, highlight);
+    }
+
+    /** Home zone marbles (not on board yet) – smaller, greyed */
+    private void drawHomeMarble(Marble marble, double x, double y) {
+        double r = CELL_SIZE / 2.8;
+        Color base = getJavaColor(marble.getColour());
+        Circle c = new Circle(x + r, y + r, r);
+        c.setFill(new Color(base.getRed(), base.getGreen(), base.getBlue(), 0.45));
+        c.setStroke(Color.web(C_INK, 0.25));
+        c.setStrokeWidth(0.8);
+        c.setId("homeMarble");
+        boardPane.getChildren().add(c);
+    }
+
+    private void drawPlayerInfoPanels() {
+        for (Player p : game.getPlayers()) {
+            double[] coords = getHomeZoneCoords(p.getColour());
+            boolean isActive = (p.getColour() == game.getActivePlayerColour());
+
+            VBox box = new VBox(2);
+            box.setId("playerInfo_" + p.getColour());
+
+            Label nameL = new Label(p.getName());
+            nameL.setFont(Font.font("Georgia", isActive ? FontWeight.BOLD : FontWeight.NORMAL, isActive ? 14 : 12));
+            nameL.setTextFill(isActive ? Color.web(C_GOLD) : Color.web(C_INK, 0.55));
+
+            Label cardsL = new Label(trackedText(p.getHand().size() + "  CARDS"));
+            cardsL.setFont(trackedFont(8));
+            cardsL.setTextFill(Color.web(C_INK, 0.4));
+
+            box.getChildren().addAll(nameL, cardsL);
+
+            // Active player gets a brush stroke underline
+            if (isActive) {
+                Canvas s = makeBrushStroke(Math.max(nameL.getText().length() * 8, 60), 7);
+                box.getChildren().add(s);
+            }
+
+            AnchorPane.setTopAnchor(box, coords[1] - 38);
+            AnchorPane.setLeftAnchor(box, coords[0]);
+            boardPane.getChildren().add(box);
+        }
+    }
+
+    /** Human hand rendered as GoY-style card tiles */
+    private void drawHumanHand() {
+        Player human = game.getPlayers().get(0);
+        for (Card card : human.getHand()) {
+            StackPane cardPane = buildCardTile(card);
+            cardPane.setOnMouseClicked(e -> {
+                try {
+                    game.selectCard(card);
+                    // Highlight selected card
+                    handPane.getChildren().forEach(n -> {
+                        n.setStyle("");
+                        if (n instanceof StackPane) n.setEffect(null);
+                    });
+                    cardPane.setEffect(new DropShadow(12, Color.web(C_GOLD)));
+                    cardPane.setStyle("-fx-border-color: " + C_GOLD + "; -fx-border-width: 2;");
+                    // Lift animation
+                    TranslateTransition tt = new TranslateTransition(Duration.millis(150), cardPane);
+                    tt.setToY(-8); tt.play();
+                } catch (GameException ex) {
+                    showAlert(JOptionPane.WARNING_MESSAGE, "Selection Error", ex.getMessage());
+                }
+            });
+            // Hover lift
+            cardPane.setOnMouseEntered(ev -> {
+                TranslateTransition tt = new TranslateTransition(Duration.millis(120), cardPane);
+                tt.setToY(-5); tt.play();
+            });
+            cardPane.setOnMouseExited(ev -> {
+                TranslateTransition tt = new TranslateTransition(Duration.millis(120), cardPane);
+                tt.setToY(0); tt.play();
+            });
+            handPane.getChildren().add(cardPane);
+        }
+    }
+
+    /** Card tile styled like GoY's skill/item cards: dark panel, gold accents, tracked text */
+    private StackPane buildCardTile(Card card) {
+        StackPane pane = new StackPane();
+        pane.setPrefSize(80, 118);
+        pane.setCursor(javafx.scene.Cursor.HAND);
+
+        // Card body
+        Rectangle bg = new Rectangle(80, 118);
+        bg.setFill(new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.web("#28231E")),
+            new Stop(1, Color.web("#1A1410"))));
+        bg.setStroke(Color.web(C_INK, 0.6));
+        bg.setStrokeWidth(1);
+        bg.setArcWidth(5); bg.setArcHeight(5);
+
+        // Top gold accent bar
+        Rectangle topBar = new Rectangle(80, 4);
+        topBar.setFill(Color.web(C_GOLD, 0.8));
+        topBar.setArcWidth(5); topBar.setArcHeight(2);
+        StackPane.setAlignment(topBar, Pos.TOP_CENTER);
+
+        // Determine suit symbol
+        String suitSymbol = "✦";
+        if (card instanceof Standard) {
+            switch (((Standard) card).getSuit()) {
+                case HEART:   suitSymbol = "♥"; break;
+                case DIAMOND: suitSymbol = "♦"; break;
+                case CLUB:    suitSymbol = "♣"; break;
+                case SPADE:   suitSymbol = "♠"; break;
+            }
+        }
+
+        // Rank / name
+        String rankStr = (card instanceof Standard) ?
+            String.valueOf(((Standard) card).getRank()) : "★";
+
+        Label rankL = new Label(rankStr);
+        rankL.setFont(Font.font("Georgia", FontWeight.BOLD, 28));
+        rankL.setTextFill(Color.web(C_GOLD));
+        StackPane.setAlignment(rankL, Pos.TOP_LEFT);
+        rankL.setPadding(new Insets(10, 0, 0, 10));
+
+        Label suitL = new Label(suitSymbol);
+        suitL.setFont(Font.font("Georgia", 18));
+        boolean isRed = (card instanceof Standard) &&
+            (((Standard)card).getSuit() == model.card.standard.Suit.HEART ||
+             ((Standard)card).getSuit() == model.card.standard.Suit.DIAMOND);
+        suitL.setTextFill(isRed ? Color.web("#CC4040") : Color.web("#CCCCCC", 0.85));
+        StackPane.setAlignment(suitL, Pos.TOP_RIGHT);
+        suitL.setPadding(new Insets(10, 10, 0, 0));
+
+        Label nameL = new Label(card.getName().toUpperCase());
+        nameL.setFont(trackedFont(7));
+        nameL.setTextFill(Color.web("#AAAAAA", 0.8));
+        nameL.setWrapText(true);
+        nameL.setMaxWidth(68);
+        nameL.setTextAlignment(TextAlignment.CENTER);
+        StackPane.setAlignment(nameL, Pos.BOTTOM_CENTER);
+        nameL.setPadding(new Insets(0, 0, 10, 0));
+
+        // Diamond separator
+        Polygon diam = new Polygon(0.0, -5.0, 5.0, 0.0, 0.0, 5.0, -5.0, 0.0);
+        diam.setFill(Color.web(C_GOLD, 0.35));
+        StackPane.setAlignment(diam, Pos.CENTER);
+
+        pane.getChildren().addAll(bg, topBar, rankL, suitL, diam, nameL);
+        return pane;
+    }
+
+    private void updateFirepit() {
+        // Remove old card labels (keep bg + label)
+        firepitPane.getChildren().removeIf(n -> n instanceof Label && ((Label)n).getText().contains("\n") == false
+            && !((Label)n).getText().equals("FIRE\nPIT"));
+
+        ArrayList<Card> fp = game.getFirePit();
+        for (int i = fp.size() - 1; i >= 0; i--) {
+            if (fp.get(i) != null) {
+                Card top = fp.get(i);
+                String display = top.getName().toUpperCase();
+                if (top instanceof Standard) display += "\n" + ((Standard)top).getSuit();
+
+                Label lbl = new Label(display);
+                lbl.setFont(trackedFont(8));
+                lbl.setTextFill(Color.web(C_GOLD));
+                lbl.setTextAlignment(TextAlignment.CENTER);
+                lbl.setAlignment(Pos.CENTER);
+                firepitPane.getChildren().add(lbl);
+
+                // Appear with fade
+                lbl.setOpacity(0);
+                FadeTransition ft = new FadeTransition(Duration.millis(400), lbl);
+                ft.setToValue(1); ft.play();
+                break;
+            }
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // TURN LOGIC
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void handleHumanTurn() {
+        Player human = game.getPlayers().get(0);
+        Card selected = human.getSelectedCard();
+        if (selected == null) {
+            showAlert(JOptionPane.WARNING_MESSAGE, "No Card", "Please select a card.");
+            return;
+        }
+        if (selected instanceof Seven && guiSelectedMarbles.size() == 2) {
+            Integer[] opts = {1, 2, 3, 4, 5, 6};
+            Integer res = (Integer) JOptionPane.showInputDialog(null,
+                "Split distance (marble 1 gets N, marble 2 gets 7-N):", "Seven",
+                JOptionPane.QUESTION_MESSAGE, null, opts, opts[2]);
+            if (res == null) return;
+            try { game.editSplitDistance(res); }
+            catch (SplitOutOfRangeException ex) {
+                showAlert(JOptionPane.ERROR_MESSAGE, "Invalid Split", ex.getMessage()); return;
+            }
+        }
+        try {
+            int preSize = human.getMarbles().size();
+            String cardName = selected.getName();
+            game.playPlayerTurn();
+            game.endPlayerTurn();
+            updateLog(human.getName() + "  ·  played  " + cardName);
+            guiSelectedMarbles.clear();
+            updateUI();
+            if (human.getMarbles().size() > preSize) {
+                updateLog("⚠  TRAP  ·  marble returned home");
+                showAlert(JOptionPane.INFORMATION_MESSAGE, "Trap!", "A marble fell into a trap and returned home.");
+            }
+            Colour w = game.checkWin();
+            if (w != null) { announceWinner(w); return; }
+            executeCPUTurns();
+        } catch (GameException e) {
+            showAlert(JOptionPane.WARNING_MESSAGE, "Invalid Move", e.getMessage());
+            game.deselectAll(); guiSelectedMarbles.clear(); updateUI();
+        }
+    }
+
+    private void handleDiscardTurn() {
+        Player human = game.getPlayers().get(0);
+        if (human.getSelectedCard() == null) {
+            showAlert(JOptionPane.WARNING_MESSAGE, "No Card", "Select a card to discard.");
+            return;
+        }
+        updateLog(human.getName() + "  ·  discarded and passed");
+        try { game.endPlayerTurn(); } catch (Exception ignored) {}
+        guiSelectedMarbles.clear(); updateUI(); executeCPUTurns();
+    }
+
+    private void executeCPUTurns() {
+        if (cpuTimeline != null && cpuTimeline.getStatus() == Timeline.Status.RUNNING) return;
+        setControlsEnabled(false);
+
+        cpuTimeline = new Timeline();
+        KeyFrame kf = new KeyFrame(Duration.seconds(1.4), e -> {
+            Player human = game.getPlayers().get(0);
+            if (game.getActivePlayerColour() == human.getColour()) {
+                if (!game.canPlayTurn()) {
+                    updateLog(human.getName() + "  ·  no cards – skipping");
+                    try { game.endPlayerTurn(); } catch (Exception ignored) {}
+                    guiSelectedMarbles.clear(); updateUI();
+                } else {
+                    setControlsEnabled(true); cpuTimeline.stop();
+                }
+            } else {
+                Player active = null;
+                for (Player p : game.getPlayers())
+                    if (p.getColour() == game.getActivePlayerColour()) { active = p; break; }
+                if (active instanceof CPU) {
+                    if (game.canPlayTurn()) {
+                        try { active.play(); } catch (Exception ignored) {}
+                    }
+                    try { game.endPlayerTurn(); } catch (Exception ignored) {}
+                    updateUI();
+                    ArrayList<Card> fp = game.getFirePit();
+                    String card = "—";
+                    for (int i = fp.size()-1; i >= 0; i--)
+                        if (fp.get(i) != null) { card = fp.get(i).getName(); break; }
+                    updateLog(active.getName() + "  ·  " + card);
+                    Colour w = game.checkWin();
+                    if (w != null) { announceWinner(w); cpuTimeline.stop(); }
+                }
+            }
+        });
+        cpuTimeline.getKeyFrames().add(kf);
+        cpuTimeline.setCycleCount(Timeline.INDEFINITE);
+        cpuTimeline.play();
+    }
+
+    private void announceWinner(Colour winner) {
+        updateLog("⚔  VICTORY  ·  " + winner + " clan prevails!");
+        // Overlay
+        StackPane overlay = new StackPane();
+        overlay.setStyle("-fx-background-color: rgba(0,0,0,0.0);");
+        overlay.setPickOnBounds(false);
+
+        Rectangle dimmer = new Rectangle(W, H);
+        dimmer.setFill(Color.web("#1A1714", 0.0));
+
+        Label win = new Label("VICTORY");
+        win.setFont(Font.font("Georgia", FontWeight.BOLD, 88));
+        win.setTextFill(Color.web(C_GOLD));
+        DropShadow glow = new DropShadow(30, Color.web(C_GOLD, 0.6));
+        win.setEffect(glow);
+
+        Label clan = new Label(toDisplayName(winner.toString()).toUpperCase() + "  PREVAILS");
+        clan.setFont(trackedFont(16));
+        clan.setTextFill(Color.web(C_PARCHMENT, 0.9));
+
+        Canvas stroke = makeBrushStroke(500, 16);
+
+        Button menu = buildActionButton("RETURN  TO  MENU", C_GOLD);
+        menu.setOnAction(e -> {
+            if (cpuTimeline != null) cpuTimeline.stop();
+            FadeTransition ft = new FadeTransition(Duration.millis(500), boardPane);
+            ft.setToValue(0);
+            ft.setOnFinished(ev -> { createMainMenu(); window.setScene(menuScene); });
+            ft.play();
+        });
+
+        VBox box = new VBox(16, win, stroke, clan, menu);
+        box.setAlignment(Pos.CENTER);
+
+        overlay.getChildren().addAll(dimmer, box);
+        boardPane.getChildren().add(overlay);
+
+        // Fade in
+        FadeTransition fd = new FadeTransition(Duration.millis(250), dimmer);
+        fd.setToValue(0.72); fd.play();
+
+        FadeTransition fv = new FadeTransition(Duration.millis(700), box);
+        fv.setFromValue(0); fv.setToValue(1); fv.setDelay(Duration.millis(200)); fv.play();
+
+        ScaleTransition sv = new ScaleTransition(Duration.millis(700), win);
+        sv.setFromX(0.5); sv.setToX(1.0);
+        sv.setFromY(0.5); sv.setToY(1.0);
+        sv.setInterpolator(Interpolator.EASE_OUT); sv.setDelay(Duration.millis(200)); sv.play();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // COORDINATE HELPERS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private double[] getCrossCoordinates(int index) {
+        int side = index / 25;
+        int pos  = index % 25;
+        double ox = 195, oy = 100;
+        double x, y;
+        if      (side == 0) { x = ox + pos * CELL_SIZE; y = oy; }
+        else if (side == 1) { x = ox + 25 * CELL_SIZE;  y = oy + pos * CELL_SIZE; }
+        else if (side == 2) { x = ox + (25 - pos) * CELL_SIZE; y = oy + 25 * CELL_SIZE; }
+        else                { x = ox; y = oy + (25 - pos) * CELL_SIZE; }
+        return new double[]{x, y};
+    }
+
+    private double[] getSafeZoneCoords(Colour c, int idx) {
+        double[] base = getCrossCoordinates(getEngineBaseOffset(c));
+        return new double[]{base[0] + 26, base[1] + 26 + idx * CELL_SIZE};
+    }
+
+    private double[] getHomeZoneCoords(Colour c) {
+        switch (c) {
+            case RED:    return new double[]{168, 108};
+            case BLUE:   return new double[]{720, 108};
+            case GREEN:  return new double[]{720, 650};
+            case YELLOW: return new double[]{168, 650};
+            default:     return new double[]{0, 0};
+        }
+    }
+
+    private int getEngineBaseOffset(Colour c) {
+        for (int i = 0; i < game.getBoard().getSafeZones().size(); i++)
+            if (game.getBoard().getSafeZones().get(i).getColour() == c) return i * 25;
+        return 0;
+    }
+
+    private Color getJavaColor(Colour c) {
+        switch (c) {
+            case RED:    return Color.web("#CC3030");
+            case BLUE:   return Color.web("#2070CC");
+            case GREEN:  return Color.web("#287A30");
+            case YELLOW: return Color.web("#C8A030");
+            default:     return Color.web(C_INK);
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // VISUAL HELPERS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Atmospheric mist / particle canvas (GoY's signature misty backgrounds) */
+    private Canvas buildMistCanvas(int w, int h) {
+        Canvas canvas = new Canvas(w, h);
+        canvas.setMouseTransparent(true);
+        canvas.setOpacity(0.55);
+
+        for (int i = 0; i < px.length; i++) {
+            px[i]   = rng.nextFloat() * w;
+            py[i]   = rng.nextFloat() * h;
+            pdx[i]  = (rng.nextFloat() - 0.5f) * 0.4f;
+            pdy[i]  = (rng.nextFloat() - 0.5f) * 0.15f;
+            palp[i] = rng.nextFloat() * 0.12f + 0.02f;
+        }
+
+        if (mistTimeline != null) mistTimeline.stop();
+        mistTimeline = new Timeline(new KeyFrame(Duration.millis(60), e -> {
+            GraphicsContext gc = canvas.getGraphicsContext2D();
+            gc.clearRect(0, 0, w, h);
+            for (int i = 0; i < px.length; i++) {
+                px[i] += pdx[i];
+                py[i] += pdy[i];
+                if (px[i] < 0)  px[i] = w;
+                if (px[i] > w)  px[i] = 0;
+                if (py[i] < 0)  py[i] = h;
+                if (py[i] > h)  py[i] = 0;
+
+                double radius = 60 + rng.nextDouble() * 80;
+                RadialGradient rg = new RadialGradient(0, 0,
+                    px[i], py[i], radius, false, CycleMethod.NO_CYCLE,
+                    new Stop(0,   Color.web("#FDFCFA", palp[i])),
+                    new Stop(0.5, Color.web("#F0EDE7", palp[i] * 0.4)),
+                    new Stop(1,   Color.TRANSPARENT));
+                gc.setFill(rg);
+                gc.fillOval(px[i] - radius, py[i] - radius, radius * 2, radius * 2);
+            }
+        }));
+        mistTimeline.setCycleCount(Animation.INDEFINITE);
+        mistTimeline.play();
+
+        return canvas;
+    }
+
+    /** Ink brush stroke rendered on a small canvas */
+    private Canvas makeBrushStroke(double w, double h) {
+        Canvas c = new Canvas(w, h);
+        GraphicsContext gc = c.getGraphicsContext2D();
+        double midY = h / 2.0;
+        // Varying opacity to simulate ink brush
+        for (int i = 0; i < (int)w; i++) {
+            double progress = i / w;
+            double thick = h * (0.3 + 0.7 * Math.sin(Math.PI * progress));
+            double alpha = 0.55 + 0.45 * Math.sin(Math.PI * progress)
+                - 0.15 * rng.nextDouble();
+            gc.setFill(Color.web(C_INK, Math.max(0.05, alpha)));
+            gc.fillRect(i, midY - thick / 2, 1.2, thick);
+        }
+        return c;
+    }
+
+    /** Horizontal rule line */
+    private Line hRule(double startX, double y, double endX) {
+        Line l = new Line(startX, y, endX, y);
+        l.setStroke(Color.web(C_INK, 0.12));
+        l.setStrokeWidth(0.8);
+        return l;
+    }
+
+    /** Thin inline separator */
+    private Canvas buildInlineSep(double width) {
+        Canvas c = new Canvas(width, 1.5);
+        c.getGraphicsContext2D().setFill(Color.web(C_INK, 0.15));
+        c.getGraphicsContext2D().fillRect(0, 0, width, 1.5);
+        return c;
+    }
+
+    /** Corner diamond decorations (GoY motif) */
+    private Polygon cornerDiamond(double cx, double cy, double size) {
+        Polygon p = new Polygon(cx, cy - size, cx + size, cy, cx, cy + size, cx - size, cy);
+        p.setFill(Color.TRANSPARENT);
+        p.setStroke(Color.web(C_GOLD, 0.35));
+        p.setStrokeWidth(1);
+        p.setId("cornerDiamond");
+        return p;
+    }
+
+    /** GoY-style decorative diamond cluster (abstract background element) */
+    private StackPane buildDiamondCluster() {
+        StackPane sp = new StackPane();
+        sp.setPrefSize(200, 200);
+        StackPane.setAlignment(sp, Pos.CENTER_RIGHT);
+        sp.setTranslateX(-60);
+        sp.setMouseTransparent(true);
+
+        int[] sizes = {80, 56, 34, 18};
+        for (int s : sizes) {
+            Polygon d = new Polygon(0.0, -(double)s, (double)s, 0.0, 0.0, (double)s, -(double)s, 0.0);
+            d.setFill(Color.TRANSPARENT);
+            double alpha = 0.04 + (80.0 - s) / 80.0 * 0.06;
+            d.setStroke(Color.web(C_GOLD, alpha));
+            d.setStrokeWidth(1.2);
+            sp.getChildren().add(d);
+
+            // Slow rotation
+            RotateTransition rt = new RotateTransition(Duration.seconds(18 + s / 4.0), d);
+            rt.setByAngle(s % 2 == 0 ? 360 : -360);
+            rt.setCycleCount(Animation.INDEFINITE);
+            rt.setInterpolator(Interpolator.LINEAR);
+            rt.play();
+        }
+        return sp;
+    }
+
+    /** Action button in GoY style: dark background, tracked uppercase text */
+    private Button buildActionButton(String text, String colorHex) {
+        Button btn = new Button(text);
+        btn.setFont(trackedFont(10));
+        btn.setTextFill(Color.web(colorHex));
+        btn.setCursor(javafx.scene.Cursor.HAND);
+        btn.setStyle(
+            "-fx-background-color: " + C_INK + ";" +
+            "-fx-background-radius: 2;" +
+            "-fx-padding: 11 22 11 22;" +
+            "-fx-border-color: " + colorHex + ";" +
+            "-fx-border-width: 1;" +
+            "-fx-border-radius: 2;"
+        );
+        btn.setOnMouseEntered(e ->
+            btn.setStyle(
+                "-fx-background-color: " + colorHex + ";" +
+                "-fx-background-radius: 2;" +
+                "-fx-padding: 11 22 11 22;" +
+                "-fx-border-color: " + colorHex + ";" +
+                "-fx-border-width: 1;" +
+                "-fx-border-radius: 2;"
+            ));
+        btn.setOnMouseEntered(e -> {
+            btn.setStyle(
+                "-fx-background-color: " + colorHex + ";" +
+                "-fx-background-radius: 2;" +
+                "-fx-padding: 11 22 11 22;"
+            );
+            btn.setTextFill(Color.web(C_INK));
+        });
+        btn.setOnMouseExited(e -> {
+            btn.setStyle(
+                "-fx-background-color: " + C_INK + ";" +
+                "-fx-background-radius: 2;" +
+                "-fx-padding: 11 22 11 22;" +
+                "-fx-border-color: " + colorHex + ";" +
+                "-fx-border-width: 1;" +
+                "-fx-border-radius: 2;"
+            );
+            btn.setTextFill(Color.web(colorHex));
+        });
+        return btn;
+    }
+
+    /** Wide letter-spaced font via CSS (no external font needed) */
+    private Font trackedFont(double size) {
+        // JavaFX doesn't natively support letter-spacing via Font alone;
+        // we use Georgia for a refined, editorial feel matching GoY's typography
+        return Font.font("Georgia", size);
+    }
+
+    /** Fake letter-spacing by inserting spaces */
+    private String trackedText(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : s.toCharArray()) { sb.append(c); sb.append(' '); }
+        return sb.toString().trim();
+    }
+
+    private void showAlert(int type, String title, String msg) {
+        JOptionPane.showMessageDialog(null, msg, title, type);
+    }
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+}
