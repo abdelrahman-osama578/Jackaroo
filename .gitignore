@@ -1,5 +1,6 @@
-JackarooM2Solution/bin/ 
-JackarooM2Solution/.settings/ 
-JackarooM2Solution/.project 
-JackarooM2Solution/.classpath 
-*.class 
+.metadata/
+Jackaroo/bin/
+Jackaroo/.settings/
+Jackaroo/.project
+Jackaroo/.classpath
+*.class
